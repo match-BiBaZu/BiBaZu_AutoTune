@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "roadmap_transition": {
+    "part_name": "Dk1i",
+    "source_pose_id": 5,
+    "target_pose_id": 0,
+    "actuation": "free_y",
+    "component_edge_ids": []
+  },
+  "variants": [
+    {
+      "name": "Beispiel · vor Verwendung an der Anlage prüfen",
+      "parameters": {
+        "conveyor_speed_mm_per_sec": 100.0,
+        "arrays": [
+          {
+            "index": 1,
+            "enabled": false,
+            "nozzles_enabled": [false, false, false, false, false, false],
+            "pressure_mbar": 0,
+            "pulse_duration_ms": 100,
+            "delay_ms": 0,
+            "offset_mm": 0.0,
+            "conveyor_velocity_delay": false
+          },
+          {
+            "index": 2,
+            "enabled": true,
+            "nozzles_enabled": [true, true, true, false, false, false],
+            "pressure_mbar": 2300,
+            "pulse_duration_ms": 50,
+            "delay_ms": 0,
+            "offset_mm": 10.0,
+            "conveyor_velocity_delay": true
+          },
+          {
+            "index": 3,
+            "enabled": false,
+            "nozzles_enabled": [false, false, false, false, false, false],
+            "pressure_mbar": 0,
+            "pulse_duration_ms": 100,
+            "delay_ms": 0,
+            "offset_mm": 0.0,
+            "conveyor_velocity_delay": false
+          },
+          {
+            "index": 4,
+            "enabled": false,
+            "nozzles_enabled": [false, false, false, false, false, false],
+            "pressure_mbar": 0,
+            "pulse_duration_ms": 100,
+            "delay_ms": 0,
+            "offset_mm": 0.0,
+            "conveyor_velocity_delay": false
+          }
+        ]
+      }
+    }
+  ]
+}
