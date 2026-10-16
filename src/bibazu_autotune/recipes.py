@@ -77,10 +77,28 @@ def transition_key(context):
     ]
 
 
+def transition_identity(context):
+    """Exact local choice identity, including grouped choices with the same pose pair."""
+    if not context:
+        return None
+    return [*transition_key(context), context.get("edge_id"), context.get("source_group_key")]
+
+
 def validate_recipe(recipe, context):
     if not isinstance(recipe, dict) or recipe.get("schema_version") != 1:
         raise ValueError("Unbekanntes Testreihenformat.")
-    if transition_key(recipe.get("roadmap_transition")) != transition_key(context):
+    saved_context = recipe.get("roadmap_transition")
+    if (
+        not isinstance(saved_context, dict)
+        or not {"part_name", "source_pose_id", "target_pose_id"} <= saved_context.keys()
+    ):
+        raise ValueError("Testreihe benötigt eine Roadmap-Transition.")
+    if context is not None and transition_key(saved_context) != transition_key(context):
+        raise ValueError("Testreihe gehört zu einer anderen Roadmap-Transition.")
+    if context is not None and any(
+        saved_context.get(key) and context.get(key) and saved_context[key] != context[key]
+        for key in ("edge_id", "source_group_key")
+    ):
         raise ValueError("Testreihe gehört zu einer anderen Roadmap-Transition.")
     variants = recipe.get("variants")
     if not isinstance(variants, list) or not variants:

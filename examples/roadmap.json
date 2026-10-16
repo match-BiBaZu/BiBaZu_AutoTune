@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "part_name": "Dk1i",
+  "geometry_status": "example",
+  "nodes": [
+    {"node_id": 5, "pose_ids": [5], "kind": "robust"},
+    {"node_id": 0, "pose_ids": [0], "kind": "robust"}
+  ],
+  "edges": [
+    {
+      "edge_id": "example:5->0:free_y",
+      "source": 5,
+      "target": 0,
+      "transition_kind": "actuated",
+      "actuation": "free_y",
+      "signed_angle_deg": -90.0
+    }
+  ]
+}

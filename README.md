@@ -1,104 +1,161 @@
 # BiBaZu AutoTune
 
+Eigenständige Desktop-Anwendung für manuell freigegebene Impulsparameter-Testreihen.
+Roadmap-Auswahl, Pose-Vorschau, Parameterbearbeitung, Bandbedienung, Versuchslogik,
+Winkelverlauf und Profildateien liegen in diesem Repository. Die Pressure-GUI und
+das Pressure-Repository werden zum Installieren und Ausführen nicht benötigt.
+Die Kamera-Anwendung stellt weiterhin ihre Aufnahme- und Messdaten-API bereit.
 
-
-Manuell freigegebene Parameter-Testreihen für Pressure Control und die
-Baumer-Kamera-GUI. V1 verwendet vorgegebene Varianten. Sie enthält noch keinen
-Optimierungsalgorithmus und bewertet den Erfolg einer Roadmap-Transition nicht automatisch.
+V1 verwendet vorgegebene Varianten. Sie enthält keinen Optimierungsalgorithmus
+und bewertet den Erfolg einer Roadmap-Transition nicht automatisch.
 
 ## Installation und Start
 
-Die drei Repositories liegen standardmäßig nebeneinander:
-
-```text
-Workspace/
-  BiBaZu_Big_Boi/
-  USBaZu_Baumer_Kamera_image_processing/
-  BiBaZu_AutoTune/
-```
-
-In diesem Repository `Setup.ps1` ausführen. Benötigt werden Python 3.11+ oder uv.
-Auch die Abhängigkeiten der beiden anderen Projekte aktualisieren:
+Python 3.11+ oder uv installieren, dann in diesem Repository:
 
 ```powershell
-# Im Repository BiBaZu_Big_Boi:
-uv pip install --python .venv\Scripts\python.exe -r requirements.txt
-# Im Kamera-Repository:
-./Setup.ps1
-# Im AutoTune-Repository:
 ./Setup.ps1
 ./Start.cmd
 ```
 
-Alternativ öffnet **AutoTune öffnen** in Pressure Control das Fenster direkt.
-Der Button verwendet die AutoTune-Umgebung im benachbarten Repository.
-`BIBAZU_AUTOTUNE_PYTHON` überschreibt den vollständigen Pfad zu dessen Python.
+Der normale Start betreibt eine eigene, fensterlose PLC-API auf einem freien
+Loopback-Port. Die Oberfläche spricht ausschließlich über HTTP mit dieser API;
+nur der API-Dienst greift über ADS auf die SPS zu. Start und Verbindungsaufbau
+übernehmen keine Maschinen-Standardwerte und starten das Band nicht.
+
+Die Pressure-GUI vorher schließen: Der API-Dienst verwendet denselben Windows-
+Prozess-Lock `Local\BiBaZuPlcControl` wie die vorhandenen Maschinenanwendungen.
+Er verweigert Schreibzugriffe bei aktiver Reorientation-Control-SPS-Ownership.
+
+Die SPS-Verbindung ist konfigurierbar:
+
+```powershell
+./Start.ps1 --plc-ip 192.168.10.23 --ams-net-id 10.145.4.14.1.1 --ads-port 851
+./Start.ps1 --vision-url http://127.0.0.1:8766 --output-dir D:\AutoTuneRuns
+```
+
+Die angegebenen PLC-Werte sind die Vorgaben der bestehenden Anlage. Eine passende
+ADS-Route und die vorhandene SPS-/Tandem-Konfiguration werden vorausgesetzt.
+Kalibrierung, Lichtschranken-Einrichtung und Roboterwinkel-Verstellung bleiben
+in ihren bisherigen Werkzeugen. AutoTune liest deren Werte nur als Metadaten.
+
+## Manuelle Array- und Bandsteuerung
+
+Eine Roadmap und die Kamera-Anwendung sind für die manuelle Bedienung optional.
+Ohne ausgewählte Transition erinnert **Keine Roadmap geladen** im Fenster daran.
+
+1. **SPS verbinden** wählen.
+2. Array-Aktivierung, Düsen, Impulsparameter und Bandgeschwindigkeit einstellen.
+3. Bei stehendem Band **Parameter übernehmen** wählen. AutoTune schreibt die
+   Werte über die API und bestätigt erst nach erfolgreichem Rücklesen.
+4. **Band starten** und **Band stoppen** manuell bedienen. Das Band verwendet
+   die zuletzt bestätigten SPS-Werte; weitere Editoränderungen müssen zuerst
+   mit **Parameter übernehmen** angewendet werden.
+
+Das Schreiben von Parametern startet weder das Band noch eine Kameraaufnahme.
+Während das Band fährt oder eine Schreiboperation läuft, ist die Übernahme
+gesperrt. Diese Bedienung erzeugt keine Versuchsdateien. Für Kamera-Testreihen
+weiterhin eine Transition auswählen und den folgenden Ablauf verwenden.
 
 ## Eine Testreihe durchführen
 
-1. Pressure Control starten, SPS verbinden und eine Roadmap-Transition auswählen.
-2. Kamera-GUI starten und Kamera oder Demo verbinden. ROI, Hintergrund,
-   Winkelreferenz und Aufnahmestart in der Kamera-GUI einstellen. Eine eventuell
-   manuell scharfgeschaltete Aufnahme zuerst entschärfen.
-3. AutoTune öffnen. Die Anwendung liest nach Sitzungsbeginn die tatsächlichen
-   SPS-Einstellungen. Die Parameterbedienung in Pressure Control ist während
-   der Sitzung gesperrt; das Band bleibt dort bedienbar.
-4. Varianten kopieren und bearbeiten oder eine gespeicherte JSON-Testreihe laden.
-   Die vier Arrays haben gemeinsame Parameter je Array und je sechs einzeln
-   schaltbare Düsen. Die Bandgeschwindigkeit gilt global.
-5. Band ausschalten, Bauteil in Ausgangslage bringen und **Versuch freigeben**
-   wählen. Erst nach bestätigtem Schreiben und Rücklesen wird die Kamera scharf.
-6. Band in Pressure Control manuell bedienen. Im Kamera-Modus **Manuell** die
-   Aufnahme zusätzlich in AutoTune auslösen; bei Bewegung oder Lichtschranke
-   erfolgt der Aufnahmestart entsprechend der Kamerakonfiguration.
-7. Nach dem Speichern erscheint das Ergebnis. Das Band manuell ausschalten und
-   das Bauteil für den nächsten Versuch zurücklegen. Jeder Versuch benötigt eine
-   neue Freigabe; es gibt keine automatische Versuchsfolge.
-8. Ein Ergebnis auswählen und **Ergebnis übernehmen und Profil speichern**
-   anklicken. Nach Übernahme öffnet sich der bekannte Speicherdialog in Pressure
-   Control. Abbrechen des Dialogs speichert keine Datei.
+1. Kamera-Anwendung starten, Kamera oder Demo verbinden und ROI, Hintergrund,
+   Winkelreferenz sowie Aufnahmestart einstellen. Eine manuell scharfgeschaltete
+   Aufnahme zuerst entschärfen.
+2. AutoTune starten. **Roadmap auswählen** öffnet JSON-/YAML-Roadmaps mit
+   Ausgangs-/Zielposen und direkten oder gruppierten Übergängen. Alternativ ein
+   vorhandenes **Profil laden** oder eine **Testreihe laden**. Das ist bereits
+   ohne Verbindung möglich und schreibt keine Werte auf die SPS.
+3. **SPS verbinden** wählen. AutoTune liest die tatsächlichen SPS-Ausgangswerte;
+   lokal ausgewählte Transitionen und geladene Varianten bleiben erhalten. Die
+   Kamera-API wird anschließend separat verbunden. Ist sie nicht erreichbar,
+   bleibt die SPS verbunden und die Kamera-Zeile zeigt den genauen Fehler.
+   Nach dem Start der Kamera-Anwendung **Kamera verbinden** wählen. Versuche
+   werden erst freigegeben, wenn auch die Kamera-API verbunden ist.
+4. Varianten kopieren und bearbeiten. Vier Arrays enthalten jeweils gemeinsame
+   Impulsparameter und sechs einzeln schaltbare Düsen. Bandgeschwindigkeit gilt
+   global. Ein Wechsel der Transition beginnt einen neuen Run und leert die
+   angezeigten Ergebnisse. Während eines Versuchs ist die Auswahl gesperrt.
+5. Band stoppen, Bauteil in Ausgangslage bringen und **Versuch freigeben** wählen.
+   Erst nach bestätigtem Schreiben und Rücklesen wird die Kamera scharfgeschaltet.
+6. **Band starten** in AutoTune wählen. Während der Versuch vorbereitet wird,
+   wartet der Bandstart auf die scharfe Kamera. Im Kamera-Modus **Manuell** zusätzlich die Aufnahme in AutoTune
+   auslösen. **Band stoppen** bleibt auch während eines Bandstarts verfügbar
+   und bricht dessen laufende Startsequenz ab.
+7. Nach dem Ergebnis das Band stoppen und das Bauteil zurücklegen. Jeder Versuch
+   benötigt eine neue Freigabe; es gibt keine automatische Versuchsfolge.
+8. Ein Ergebnis auswählen und **Ergebnis übernehmen und Profil speichern** wählen.
+   AutoTune öffnet seinen eigenen Dateidialog, übernimmt die Parameter nach dessen
+   Bestätigung, prüft das Rücklesen und speichert lokal. Abbrechen des Dialogs
+   schreibt weder Parameter noch eine Datei. Schlägt das Speichern nach der
+   Parameterübernahme fehl, meldet AutoTune diesen Unterschied ausdrücklich.
 
-Der Status `completed` bedeutet, dass ein Durchlauf mit Endgrund `part_left`
-aufgezeichnet und gespeichert wurde. Er sagt nicht aus, dass die Zielpose erreicht
-ist. Die Kamera misst einen 2D-Achswinkel modulo 180°; Winkelqualität und fehlende
-Messwerte bleiben in den Daten sichtbar.
+Ein Aufzeichnungsstatus `completed` mit Endgrund `part_left` bestätigt eine
+gespeicherte Durchfahrt, nicht das Erreichen der Zielpose. Die Kamera misst einen
+2D-Achswinkel modulo 180°; fehlende Messwerte bleiben in den Daten sichtbar.
 
-Die APIs steuern das Band nicht automatisch. Auch bei Abbruch oder Verbindungsfehler
-bleiben Bandstart und Bandstopp manuell. Übernommene Parameter bleiben bestehen.
-Bei Fehlern wird kein weiterer Versuch gestartet. Neu verbinden erfolgt ausdrücklich
-über **Verbinden**; Varianten bleiben für dieselbe Transition erhalten.
+Ein Versuchsabbruch beendet die Kameraaufnahme; das Band kann weiter manuell
+gestoppt werden. Sitzungsende, Sitzungsablauf oder Beenden des PLC-Dienstes lösen
+einen Bandstopp aus, soweit ADS erreichbar ist. Bei Verbindungsfehlern gibt es
+keinen automatischen Wiederanlauf; erneut **SPS verbinden** wählen. Ein Ausfall
+der Kamera-API im Leerlauf trennt die SPS-Sitzung nicht.
 
-## Dateien und Schnittstellen
+## Roadmaps, Profile und Ergebnisse
 
-Testreihen enthalten `schema_version: 1`, `roadmap_transition` und `variants`
-mit je `name` und vollständigem `parameters`. Das Fenster prüft die Zuordnung zur
-ausgewählten Transition vor dem Laden. Ein Beispiel steht in
-[examples/testreihe.json](examples/testreihe.json).
+`BIBAZU_ROADMAPS_DIR` legt den Startordner des Roadmap-Dialogs fest. Ohne diese
+Variable beginnt er unter `Documents/BiBaZu_Roadmaps` im Benutzerverzeichnis;
+ein benachbartes Roadmap-Repository ist nicht erforderlich. Ein kleines Beispiel
+steht in [examples/roadmap.json](examples/roadmap.json). Vorhandene Roadmap-
+Dateien, Meshes, Vorschaubilder und Consumer-Sidecars können unverändert verwendet
+werden. Gespeicherte Transitionsmetadaten bleiben auch bei fehlender Roadmap erhalten.
+
+AutoTune lädt und speichert Pressure-Profile der Version 13. Exportierte Profile
+können weiterhin in Pressure Control geladen werden. Maschinenkalibrierung,
+Lichtschrankenwerte und Roboterwinkel werden nicht aus einem Profil auf Hardware
+übertragen. Bestehende Metadaten bleiben für die Dateikompatibilität erhalten;
+die Oberfläche zeigt keine Roboterangaben an.
+
+Testreihen behalten `schema_version: 1`, `roadmap_transition` und `variants`
+mit je `name` und vollständigem `parameters`. Bei bereits ausgewählter Transition
+wird die Zuordnung geprüft. Beispiel: [examples/testreihe.json](examples/testreihe.json).
 
 Ergebnisse liegen standardmäßig unter `data/runs/<run_id>/`:
 
 - `run.json`: Transition, tatsächliche Ausgangsparameter und Erstellungszeit.
-- `<trial_id>.json`: Versuchsparameter, Status, Kameraeinstellungen, vollständige
-  Messreihe und Verweis auf den Kamera-Clip. Dateien werden atomar ersetzt.
+- `<trial_id>.json`: Parameter, Status, Kameraeinstellungen, Messreihe und Clip-Verweis.
 
-Originalbilder bleiben im Aufnahmeordner der Kamera-GUI. Die AutoTune-Dateien
-verweisen auf diesen lokalen Ordner; sie kopieren die Bilder nicht.
+JSON-Dateien werden atomar ersetzt. Originalbilder bleiben im Aufnahmeordner der
+Kamera-Anwendung; AutoTune kopiert sie nicht. Der Profil-Dateidialog beginnt unter
+`data/profiles/` beziehungsweise im zuletzt gewählten Profilordner.
+
+## PLC-API separat betreiben
 
 ```powershell
-./Start.ps1 --pressure-url http://127.0.0.1:8765 --vision-url http://127.0.0.1:8766 --output-dir D:\AutoTuneRuns
+./StartApi.ps1 --port 8765
+# In einem zweiten Terminal:
+./Start.ps1 --pressure-url http://127.0.0.1:8765
 ```
 
-API-Dokumentation der laufenden Anwendungen:
+Alternativ: `bibazu-autotune-api` oder
+`python -m bibazu_autotune.pressure_service`. Der externe Dienst bleibt beim
+Schließen der Oberfläche aktiv; die Freigabe der Sitzung fordert einen Bandstopp
+an. Die alte API der Pressure-GUI wird für diesen Workflow nicht benötigt.
 
-- Pressure Control: `http://127.0.0.1:8765/docs`
-- Kamera: `http://127.0.0.1:8766/docs`
-- Maschinenlesbares Schema jeweils unter `/openapi.json`.
+Der Dienst bindet ausschließlich `127.0.0.1`. API-Dokumentation liegt auf seinem
+Port unter `/docs`, das Schema unter `/openapi.json`. Kamera-Vorgabe ist
+`http://127.0.0.1:8766`.
 
-Die Clients in `src/bibazu_autotune/clients.py` sind unabhängig vom Fenster
-verwendbar. Alle schreibenden Aufrufe benötigen den Header `X-Session-Id`.
-Heartbeat alle fünf Sekunden; nach 15 Sekunden ohne Heartbeat verfällt die
-Sitzung. `Strategy` und `RecipeStrategy` in `engine.py` bilden die Schnittstelle
-für eine spätere Parametersuche.
+- `GET /api/v1/health`, `/capabilities`, `/state`
+- `POST /api/v1/sessions`, `/sessions/heartbeat`; `DELETE /api/v1/sessions/current`
+- `PUT /api/v1/parameters`; `GET /api/v1/operations/{operation_id}`
+- `POST /api/v1/conveyor/start`, `/api/v1/conveyor/stop`
+
+API-Version und Parameterformat bleiben bei Version 1. Sitzungen benötigen
+keine Roadmap-Transition. Schreibaufrufe erfordern `X-Session-Id`; Heartbeats
+erfolgen alle fünf Sekunden, die Sitzung verfällt nach 15 Sekunden. Operationen
+laufen asynchron und prüfen ihre Sitzung erneut vor Schreibzugriffen. Ein
+Parameteraufruf startet das Band nicht. Transitionen und Dateidialoge gehören
+zur Oberfläche; es gibt keinen API-Endpunkt `profile/save-dialog`.
 
 ## Entwicklung und Tests
 
@@ -107,15 +164,12 @@ uv run --extra dev pytest --basetemp .test-tmp
 uv run --extra dev ruff check src tests
 ```
 
-Die Tests nutzen HTTP-Testtransporte und eine Oberfläche ohne Hardware.
-`test_workspace_integration.py` prüft zusätzlich beide echten HTTP-Server mit
-Fake-SPS und synthetischer Kamera, wenn die beiden Nachbarprojekte samt deren
-Entwicklungsabhängigkeiten verfügbar sind. Beispiel aus dem Kamera-Repository:
+Alle Tests laufen ohne Nachbar-Repositories und ohne echte ADS-/Kameraverbindung.
+Sie umfassen Memory-PLC, beide HTTP-Server mit synthetischer Kamera-API, GUI,
+Roadmap-Auswahl, Profile sowie den isolierten Programmstart. Ein echter
+Anlagenversuch einschließlich Kamera-/Lichtschrankensignal bleibt eine gesonderte
+Abnahme. `Strategy` und `RecipeStrategy` bilden weiterhin die Schnittstelle für
+eine spätere Parametersuche.
 
-```powershell
-$env:PYTHONPATH = (Resolve-Path ../BiBaZu_AutoTune/src).Path
-./.venv/Scripts/python.exe -m pytest ../BiBaZu_AutoTune/tests/test_workspace_integration.py --basetemp .diagnostics/autotune-integration
-```
-
-Ein realer Anlagenversuch einschließlich Lichtschrankensignal ist eine gesonderte
-Abnahme. Die automatisierten Tests öffnen keine echte ADS- oder Kameraverbindung.
+Die portierten Roadmap-, Vorschau-, ADS- und Prozess-Lock-Bausteine stammen aus
+BiBaZu Pressure Control und werden hier unter derselben MIT-Lizenz gepflegt.

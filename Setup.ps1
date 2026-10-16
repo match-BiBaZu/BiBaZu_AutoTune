@@ -14,4 +14,4 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     & .\.venv\Scripts\python.exe -m pip install -e '.[dev]'
     if ($LASTEXITCODE -ne 0) { throw 'Paketinstallation fehlgeschlagen.' }
 }
-Write-Host 'Bereit. Start.cmd öffnet AutoTune.'
+Write-Host 'Bereit. Start.cmd öffnet AutoTune mit eigener PLC-API; StartApi.cmd startet nur die API.'

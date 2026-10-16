@@ -12,6 +12,8 @@ class ApiFailure(RuntimeError):
 
 
 class Client:
+    service_name = "API"
+
     def __init__(self, url, client=None):
         parsed = urlsplit(url)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}:
@@ -22,6 +24,7 @@ class Client:
             timeout=httpx.Timeout(5.0, connect=1.0),
         )
         self.session_id = None
+        self.url = url
 
     def request(self, method, path, **kwargs):
         headers = {"X-Session-Id": self.session_id} if self.session_id else {}
@@ -34,9 +37,16 @@ class Client:
                 detail = exc.response.json().get("detail", exc.response.text)
             except ValueError:
                 detail = exc.response.text
-            raise ApiFailure(f"{exc.response.status_code}: {detail}") from exc
+            raise ApiFailure(
+                f"{self.service_name} ({self.url}): {exc.response.status_code}: {detail}"
+            ) from exc
         except (httpx.HTTPError, ValueError) as exc:
-            raise ApiFailure(str(exc)) from exc
+            detail = (
+                "Zeitüberschreitung (timed out)"
+                if isinstance(exc, httpx.TimeoutException)
+                else str(exc)
+            )
+            raise ApiFailure(f"{self.service_name} ({self.url}): {detail}") from exc
 
     def acquire(self):
         capabilities = self.request("GET", "capabilities")
@@ -64,17 +74,24 @@ class Client:
 
 
 class PressureClient(Client):
+    service_name = "SPS-API"
+
     def apply(self, parameters):
         return self.request("PUT", "parameters", json=parameters)
 
     def operation(self, operation_id):
         return self.request("GET", f"operations/{operation_id}")
 
-    def save_dialog(self):
-        return self.request("POST", "profile/save-dialog")
+    def start_conveyor(self):
+        return self.request("POST", "conveyor/start")
+
+    def stop_conveyor(self):
+        return self.request("POST", "conveyor/stop")
 
 
 class VisionClient(Client):
+    service_name = "Kamera-API"
+
     def start(self, run_id, trial_id, context, timeout_seconds=60.0):
         return self.request(
             "POST",
