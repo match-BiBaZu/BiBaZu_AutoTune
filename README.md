@@ -1,5 +1,7 @@
 # BiBaZu AutoTune
 
+
+
 Manuell freigegebene Parameter-Testreihen für Pressure Control und die
 Baumer-Kamera-GUI. V1 verwendet vorgegebene Varianten. Sie enthält noch keinen
 Optimierungsalgorithmus und bewertet den Erfolg einer Roadmap-Transition nicht automatisch.
