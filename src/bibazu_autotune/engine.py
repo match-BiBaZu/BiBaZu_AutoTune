@@ -14,6 +14,7 @@ from typing import Protocol
 from .clients import ApiFailure
 from .profiles import make_profile
 from .recipes import transition_identity, validate_parameters
+from .trial_context import context_fields, validate_context
 
 
 def atomic_json(path, data):
@@ -67,6 +68,7 @@ class Engine:
     def set_context(self, context):
         if self.state not in {"disconnected", "ready"}:
             raise ApiFailure("Transition kann während eines Versuchs nicht geändert werden.")
+        context = validate_context(context) if context is not None else None
         if transition_identity(context) == transition_identity(self.context):
             self.context = copy.deepcopy(context)
             return
@@ -87,7 +89,7 @@ class Engine:
                 "schema_version": 1,
                 "run_id": self.run_id,
                 "created_utc": datetime.now(timezone.utc).isoformat(),
-                "roadmap_transition": self.context,
+                **context_fields(self.context),
                 "baseline": self.baseline,
             },
         )
@@ -139,7 +141,9 @@ class Engine:
         if not self.vision_connected:
             raise ApiFailure("Kamera zuerst über Kamera verbinden anschließen.")
         if not self.context or not self.run_id:
-            raise ApiFailure("Zuerst eine Roadmap-Transition in AutoTune auswählen.")
+            raise ApiFailure(
+                "Zuerst eine Roadmap-Transition auswählen oder manuelle Posen bestätigen."
+            )
         parameters = validate_parameters(parameters)
         self.camera_armed = False
         self.record = {
@@ -147,7 +151,7 @@ class Engine:
             "trial_id": uuid.uuid4().hex,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "parameters": copy.deepcopy(parameters),
-            "roadmap_transition": self.context,
+            **context_fields(self.context),
             "status": "applying",
             "live_overflow": False,
         }
@@ -176,7 +180,7 @@ class Engine:
         if not path:
             return
         if not self.context:
-            raise ApiFailure("Roadmap-Transition fehlt.")
+            raise ApiFailure("Versuchskontext fehlt.")
         self.save_parameters = validate_parameters(parameters)
         self.save_path = Path(path)
         self.profile_template = copy.deepcopy(template)
@@ -262,7 +266,7 @@ class Engine:
                     self.run_id,
                     self.current,
                     {
-                        "roadmap_transition": self.context,
+                        **context_fields(self.context),
                         "parameters": self.record["parameters"],
                     },
                 )

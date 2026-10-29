@@ -150,8 +150,9 @@ def render_mesh_preview(
     *,
     quaternion_xyzw: tuple[float, float, float, float] | None = None,
     caption: str = "Target orientation · model view",
+    triangles: tuple[Triangle, ...] | None = None,
 ) -> QPixmap:
-    triangles = _load_triangles(path)
+    triangles = _load_triangles(path) if triangles is None else triangles
     points = [point for triangle in triangles for point in triangle]
     minimum = tuple(min(point[axis] for point in points) for axis in range(3))
     maximum = tuple(max(point[axis] for point in points) for axis in range(3))

@@ -124,7 +124,10 @@ def offline_window(tmp_path, monkeypatch):
             time.sleep(0.005)
         raise AssertionError(f"timed out: {window.state}, {errors}")
 
+    window.show()
     yield window, services, errors, wait
+    window.autotune_settings.stop()
+    wait(lambda: not window.autotune_settings.workers_running())
     window.worker.stopping.set()
     wait(lambda: not window.worker.isRunning())
     window.close()

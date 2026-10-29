@@ -6,6 +6,7 @@ import copy
 from datetime import datetime
 
 from .recipes import LIMITS, validate_parameters
+from .trial_context import context_fields
 
 
 def empty_parameters():
@@ -54,6 +55,8 @@ def make_profile(parameters, context, machine_metadata=None, template=None, conv
     parameters = validate_parameters(parameters)
     profile = copy.deepcopy(template or {})
     profile.update(copy.deepcopy(machine_metadata or {}))
+    profile.pop("roadmap_transition", None)
+    profile.pop("trial_context", None)
     # Robot angle is configured metadata, not a measurement or a robot command.
     profile.setdefault("ur_ry_angle_deg", 18.0)
     profile.update(
@@ -62,7 +65,7 @@ def make_profile(parameters, context, machine_metadata=None, template=None, conv
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             "title": context.get("title")
             or f"Transition {context['source_pose_id']}-{context['target_pose_id']}",
-            "roadmap_transition": copy.deepcopy(context),
+            **context_fields(context),
             "conveyor_enabled": bool((conveyor or {}).get("enabled", False)),
             "conveyor_reverse": bool((conveyor or {}).get("reverse", False)),
             **parameters,

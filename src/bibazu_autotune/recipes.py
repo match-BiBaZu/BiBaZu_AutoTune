@@ -3,6 +3,8 @@
 import copy
 import math
 
+from .trial_context import manual_identity, read_context
+
 LIMITS = {
     "pressure_mbar": (0, 6000, int),
     "pulse_duration_ms": (1, 500, int),
@@ -65,6 +67,8 @@ def validate_parameters(parameters):
 def transition_key(context):
     if not context:
         return None
+    if context.get("kind") == "manual":
+        return manual_identity(context)
     return [
         context.get(k)
         for k in (
@@ -87,12 +91,7 @@ def transition_identity(context):
 def validate_recipe(recipe, context):
     if not isinstance(recipe, dict) or recipe.get("schema_version") != 1:
         raise ValueError("Unbekanntes Testreihenformat.")
-    saved_context = recipe.get("roadmap_transition")
-    if (
-        not isinstance(saved_context, dict)
-        or not {"part_name", "source_pose_id", "target_pose_id"} <= saved_context.keys()
-    ):
-        raise ValueError("Testreihe benötigt eine Roadmap-Transition.")
+    saved_context = read_context(recipe)
     if context is not None and transition_key(saved_context) != transition_key(context):
         raise ValueError("Testreihe gehört zu einer anderen Roadmap-Transition.")
     if context is not None and any(
