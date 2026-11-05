@@ -167,12 +167,15 @@ def test_invalid_input_never_writes(hardware, change):
     assert plc.writes == []
 
 
-@pytest.mark.parametrize("mode", ["moving", "calibration", "partial", "mismatch", "owner"])
+@pytest.mark.parametrize(
+    "mode", ["calibration", "velocity_check", "force_delay", "partial", "mismatch", "owner"]
+)
 def test_write_failures_are_reported_without_retry(hardware, mode):
     _, plc, client = hardware
     headers = acquire(client)
-    plc.values["MAIN.GuiConveyorEnabled"] = mode == "moving"
     plc.values["MAIN.GuiConveyorCalibrationMode"] = mode == "calibration"
+    plc.values["MAIN.GuiVelocityCheckMode"] = mode == "velocity_check"
+    plc.values["MAIN.GuiForceDelayMeasurementEnabled"] = mode == "force_delay"
     plc.values["MAIN.GuiReorientationControlActive"] = mode == "owner"
     plc.partial, plc.mismatch = mode == "partial", mode == "mismatch"
     candidate = parameters()
@@ -181,6 +184,30 @@ def test_write_failures_are_reported_without_retry(hardware, mode):
     assert result["status"] == "failed"
     assert result["error"]
     assert len(plc.writes) == (1 if mode in {"partial", "mismatch"} else 0)
+
+
+def test_parameter_write_during_motion_leaves_motor_commands_unchanged(hardware):
+    _, plc, client = hardware
+    headers = acquire(client)
+    motor_values = {
+        "MAIN.GuiConveyorEnabled": True,
+        "MAIN.ConveyorServo1TargetVelocity": 100,
+        "MAIN.ConveyorServo2TargetVelocity": 120,
+        "MAIN.StepperPosBusy": True,
+        "MAIN.GuiConveyorReverse": True,
+    }
+    plc.values.update(motor_values)
+    candidate = parameters()
+    candidate["arrays"][0].update(pressure_mbar=1500, offset_mm=25.0, pulse_duration_ms=70)
+    candidate["conveyor_speed_mm_per_sec"] = 95.0
+    result = operation(client, client.put("/api/v1/parameters", json=candidate, headers=headers))
+    assert result["status"] == "succeeded", result
+    assert result["snapshot"]["parameters"] == candidate
+    assert result["snapshot"]["conveyor"]["moving"]
+    assert {key: plc.values[key] for key in motor_values} == motor_values
+    assert len(plc.writes) == 1
+    assert not set(plc.writes[0]) & set(motor_values)
+    assert "MAIN.GuiConveyorReset" not in plc.writes[0]
 
 
 def test_conveyor_start_and_stop_sequence(hardware):

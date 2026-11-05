@@ -8,6 +8,7 @@ from typing import Generic, Literal, Protocol, TypeVar
 
 from .analytical_model import (
     AnalyticalModel,
+    CandidateKey,
     CandidateResult,
     ModelConfiguration,
     OffsetEstimator,
@@ -54,8 +55,8 @@ class PulseEstimator(Protocol):
 
 class PressureRefiner(Protocol):
     def refine(
-        self, request: AutotuneInput, pressures_mbar: dict[int, float]
-    ) -> StageResult[dict[int, float]]: ...
+        self, request: AutotuneInput, pressures_mbar: dict[CandidateKey, float]
+    ) -> StageResult[dict[CandidateKey, float]]: ...
 
 
 class ManualPulseEstimator:
@@ -77,9 +78,9 @@ class PendingPressureRefiner:
 class PreparationResult:
     missing: tuple[str, ...]
     pulse: StageResult[dict[int, int]]
-    offset: StageResult[dict[int, float]]
-    pressure: StageResult[dict[int, float]]
-    ml: StageResult[dict[int, float]]
+    offset: StageResult[dict[CandidateKey, float]]
+    pressure: StageResult[dict[CandidateKey, float]]
+    ml: StageResult[dict[CandidateKey, float]]
     candidates: tuple[CandidateResult, ...] = ()
 
 
@@ -148,16 +149,8 @@ class AutotunePipeline:
                 )
             except ValueError as exc:
                 missing.append(str(exc))
-        offsets = {
-            c.mount.array_index: c.impact.offset_m * 1000
-            for c in candidates
-            if c.impact is not None
-        }
-        pressures = {
-            c.mount.array_index: c.pressure.gauge_pa / 100
-            for c in candidates
-            if c.pressure is not None
-        }
+        offsets = {c.key: c.impact.offset_m * 1000 for c in candidates if c.impact is not None}
+        pressures = {c.key: c.pressure.gauge_pa / 100 for c in candidates if c.pressure is not None}
         offset = StageResult(
             "ready" if offsets else "blocked",
             offsets or None,
@@ -198,10 +191,6 @@ class AutotunePipeline:
             pulse = self.pulse.estimate(request)
             ml = self.ml.refine(
                 request,
-                {
-                    c.mount.array_index: c.pressure.gauge_pa / 100
-                    for c in candidates
-                    if c.status == "ready"
-                },
+                {c.key: c.pressure.gauge_pa / 100 for c in candidates if c.status == "ready"},
             )
         return PreparationResult(tuple(missing), pulse, offset, pressure, ml, candidates)

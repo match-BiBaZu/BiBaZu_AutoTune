@@ -30,11 +30,20 @@ from bibazu_autotune.trial_context import manual_context
 
 
 def configured(**values):
-    config = ModelConfiguration(**values)
+    # Preserve the original reference geometry independently of current machine defaults.
+    config = ModelConfiguration(
+        **{"diameter_m": 0.0007, "pitch_m": (0.024 - 0.0007) / 7, "offset_safety_m": 0, **values}
+    )
     return replace(
         config,
         mounts=tuple(
-            replace(m, row_center_m=0.015 if m.normal_axis == "z" else 0.02) for m in config.mounts
+            replace(
+                m,
+                row_center_m=(0.015 if m.normal_axis == "z" else 0.02)
+                + (2 * (m.nozzle_index - 1) if m.nozzle_index <= 3 else 0),
+                longitudinal_offset_m=2.0 * (m.nozzle_index - 4) if m.nozzle_index >= 4 else 0,
+            )
+            for m in config.mounts
         ),
     )
 
@@ -57,12 +66,23 @@ def test_gravity_and_default_mounts():
     assert config.gravity[1] == pytest.approx(-9.81 * math.cos(math.radians(2.2)) / math.sqrt(2))
     assert config.gravity[1] == config.gravity[2]
     assert np.linalg.norm(config.gravity) == pytest.approx(9.81)
-    assert config.outer_width_m == pytest.approx(0.024)
-    assert [(m.array_index, m.nozzle_index) for m in config.mounts if m.rotation_axis == "y"] == [
+    assert config.diameter_m == 0.0008
+    assert config.pitch_m == 0.0028
+    assert config.center_span_m == pytest.approx(0.0196)
+    assert config.outer_width_m == pytest.approx(0.0204)
+    assert [
+        (m.array_index, m.nozzle_index)
+        for m in config.mounts
+        if m.rotation_axis == "y" and m.nozzle_index == 1
+    ] == [
         (2, 1),
         (4, 1),
     ]
-    assert [(m.array_index, m.nozzle_index) for m in config.mounts if m.rotation_axis == "z"] == [
+    assert [
+        (m.array_index, m.nozzle_index)
+        for m in config.mounts
+        if m.rotation_axis == "z" and m.nozzle_index == 1
+    ] == [
         (1, 1),
         (3, 1),
     ]
@@ -142,9 +162,10 @@ def test_offset_conversion_full_hits_and_lever(tmp_path, angle):
     turn = Turn("y", angle)
     mechanics = tipping_mechanics(body, turn, mount, config)
     impact = AutomaticOffsetEstimator().estimate(body, turn, mount, mechanics, config)
-    assert impact.weights == (1.0,) * 8
+    assert impact.weights == (1.0,) * 8 + (0.0,) * 16
+    assert impact.active_nozzles == (1,)
     radius = config.jet_radius_m
-    for p in impact.points_m:
+    for p in impact.points_m[:8]:
         assert p[0] == pytest.approx(body.vertices[:, 0].max() + radius - impact.offset_m)
     assert impact.area_eff_m2 == pytest.approx(8 * math.pi * radius**2)
     assert impact.lever_arm_m == pytest.approx(0.02 - radius - config.margin_m, abs=1e-7)
@@ -266,8 +287,8 @@ def test_screenshot_regression_seven_hits_one_misses(tmp_path):
     turn = Turn("y", -90)
     mechanics = tipping_mechanics(body, turn, mount, config)
     impact = AutomaticOffsetEstimator().estimate(body, turn, mount, mechanics, config)
-    assert impact.weights == (0.5,) + (1.0,) * 5 + (0.5, 0.0)
-    assert len(impact.coverage_fractions) == 8
+    assert impact.weights == (0.5,) + (1.0,) * 5 + (0.5, 0.0) + (0.0,) * 16
+    assert len(impact.coverage_fractions) == 24
     assert 0.5 < impact.coverage_fractions[0] < 0.75
     assert 0.25 < impact.coverage_fractions[6] < 0.5
     assert impact.coverage_fractions[7] == 0
@@ -330,8 +351,8 @@ def test_longitudinal_row_offsets_center_maximal_region(tmp_path):
     mechanics = tipping_mechanics(body, Turn("x", -90), mount, config)
     impact = AutomaticOffsetEstimator().estimate(body, Turn("x", -90), mount, mechanics, config)
     assert sum(impact.weights) == 3
-    assert np.diff([p[0] for p in impact.points_m]) == pytest.approx([0.004, 0.004])
-    assert np.mean([p[0] for p in impact.points_m]) == pytest.approx(0, abs=1e-8)
+    assert np.diff([p[0] for p in impact.points_m[:3]]) == pytest.approx([0.004, 0.004])
+    assert np.mean([p[0] for p in impact.points_m[:3]]) == pytest.approx(0, abs=1e-8)
 
 
 @pytest.mark.parametrize("pulse_ms", [10, 100, 500])
@@ -380,7 +401,11 @@ def test_candidates_ignore_hardware_activations_and_use_individual_pulses(tmp_pa
 
 def test_missing_mount_and_parameter_validation(tmp_path):
     analysis, ctx, _ = analyzed_body(tmp_path)
-    result = AnalyticalModel().evaluate(analysis, ctx, parameters(), ModelConfiguration())
+    missing_mounts = replace(
+        ModelConfiguration(),
+        mounts=tuple(replace(m, row_center_m=None) for m in ModelConfiguration().mounts),
+    )
+    result = AnalyticalModel().evaluate(analysis, ctx, parameters(), missing_mounts)
     assert all(c.status == "blocked" and "Montageposition" in c.message for c in result)
     for values in (
         {"kappa": 1},

@@ -31,6 +31,7 @@ def candidate(pressure=1234.5, offset=12.25, array=2, nozzle=1, status="ready"):
             ((0, 0, 0),) * 8,
             ((0, 0, 0),) * 8,
             (((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02), (0, 0)),),
+            active_nozzles=(nozzle,),
         ),
         pressure=PressurePrediction(1, 101300 + pressure * 100, pressure * 100, 90000, ()),
     )

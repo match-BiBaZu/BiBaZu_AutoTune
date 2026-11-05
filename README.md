@@ -49,16 +49,38 @@ Ohne ausgewählte Transition erinnert **Keine Roadmap geladen** im Fenster daran
 
 1. **SPS verbinden** wählen.
 2. Array-Aktivierung, Düsen, Impulsparameter und Bandgeschwindigkeit einstellen.
-3. Bei stehendem Band **Parameter übernehmen** wählen. AutoTune schreibt die
-   Werte über die API und bestätigt erst nach erfolgreichem Rücklesen.
+3. Änderungen werden nach **250 ms Eingabepause automatisch** über die API auf
+   die SPS geschrieben und zurückgelesen. **SPS-Live** zeigt den aktuellen Status.
+   **Parameter übernehmen** kann die Übertragung zusätzlich sofort auslösen.
 4. **Band starten** und **Band stoppen** manuell bedienen. Das Band verwendet
-   die zuletzt bestätigten SPS-Werte; weitere Editoränderungen müssen zuerst
-   mit **Parameter übernehmen** angewendet werden.
+   die zuletzt bestätigten SPS-Werte. Solange Änderungen noch nicht bestätigt
+   sind, bleibt ein neuer Bandstart gesperrt.
 
 Das Schreiben von Parametern startet weder das Band noch eine Kameraaufnahme.
-Während das Band fährt oder eine Schreiboperation läuft, ist die Übernahme
-gesperrt. Diese Bedienung erzeugt keine Versuchsdateien. Für Kamera-Testreihen
-eine Transition auswählen oder manuelle Posen bestätigen und den folgenden Ablauf verwenden.
+**Auch während der normalen Bandfahrt werden Änderungen live übertragen**;
+Array-Aktivierung, Düsen, Druck, Puls, Verzögerung, Offset und Bandsollwert können
+im Editor angepasst werden. Dabei werden keine Bandstart-, Bandstopp- oder
+Richtungsbefehle gesendet. Kalibrierung und Messmodi müssen weiterhin beendet sein.
+Während eines freigegebenen Versuchs bleibt der Editor automatisch gesperrt,
+damit die protokollierten Versuchsparameter unverändert bleiben. Während einer Schreiboperation
+bleibt der Editor bedienbar; neuere Eingaben werden anschließend als vollständiger
+Parametersatz übertragen und durch älteres Rücklesen nicht überschrieben.
+Ungültige Eingaben werden im Live-Status gemeldet und nicht geschrieben.
+Bei Verbindungs- oder Rücklesefehlern gibt es keine automatische Wiederholung.
+Ohne Verbindung bleiben Änderungen lokal; beim anschließenden Verbinden werden
+die ausgewählten lokalen Werte mit der SPS abgeglichen und bei Abweichung übertragen.
+Ohne lokale Änderungen liest der Verbindungsaufbau nur die SPS-Ausgangswerte.
+Profil- und Variantenwechsel sowie die Übernahme eines berechneten Kandidaten
+verwenden denselben Live-Ablauf. Diese Bedienung erzeugt keine Versuchsdateien.
+
+**Parameter sperren** sperrt den Editor, Varianten- und Profilwechsel sowie
+Parameterübernahmen und die Versuchsfreigabe. Bandstart und Bandstopp bleiben bedienbar.
+Noch nicht gesendete Änderungen warten bis **Parameter entsperren**; ein bereits
+laufender Schreibauftrag wird abgeschlossen. Die Sperre bleibt innerhalb der Sitzung
+auch nach einem Verbindungswechsel aktiv und wird nicht in Profilen gespeichert.
+Berechnungen und die Ergebnisansicht bleiben verfügbar; zur Übernahme eines Kandidaten
+zuerst entsperren. Für Kamera-Testreihen eine Transition auswählen oder manuelle Posen
+bestätigen und den folgenden Ablauf verwenden.
 
 ## Autotune-Einstellungen und Berechnung
 
@@ -99,11 +121,15 @@ wird die bisherige Mesh-Zuordnung verworfen.
 5. Unter **Modell und Montage** die Modellparameter und Montagepositionen prüfen.
    Die Buttons zum Speichern der Modell- und Montagestandards bleiben dort verfügbar.
 6. Auf der **Hauptseite** im manuellen Parametereditor die Impulsdauer je Array
-   vorgeben und **Berechnung durchführen** wählen. Arrays und Düsen müssen dafür
+   vorgeben und im unteren Reiter **Autotune-Ergebnisse** **Berechnung durchführen** wählen.
+   Direkt daneben stehen **Ergebnisse in Ausgangswerte schreiben** und der Berechnungsstatus.
+   Arrays und Düsen müssen dafür
    noch nicht aktiviert sein. Fehlende Voraussetzungen erscheinen über dem Editor;
    während der Berechnung ist der Berechnungsbutton gesperrt.
 7. Unter **Autotune-Ergebnisse** einen Kandidaten auswählen. Tabelle, Trefferbild
-   und Details gehören zu diesem Kandidaten. **Versuchsprotokoll** enthält separat
+   und Details gehören zu diesem Kandidaten. **Kraft [N]** zeigt die berechnete
+   mittlere erforderliche Gesamtkraft der aktiven Düsen am Bauteil.
+   **Versuchsprotokoll** enthält separat
    Kameraverlauf und Versuchsergebnisse; der manuelle Editor bleibt sichtbar.
 8. Für die Übernahme eine **Bandgeschwindigkeit größer als 0 mm/s** eintragen und
    **Ergebnisse in Ausgangswerte schreiben** wählen. Die Aktion aktualisiert den
@@ -111,7 +137,7 @@ wird die bisherige Mesh-Zuordnung verworfen.
    Variante wird **Ausgangswerte** angelegt und ausgewählt.
 
 Übernommen werden Druck und Offset des ausgewählten Arrays. Dieses Array wird
-aktiviert, ausschließlich seine berechnete Düse eingeschaltet und **Offset mit
+aktiviert, ausschließlich seine automatisch ausgewählten Düsen eingeschaltet und **Offset mit
 Bandsollwert** aktiviert. Andere Arrays sowie Impulsdauer, Verzögerung und
 Bandgeschwindigkeit bleiben erhalten. Die ungerundeten Werte müssen endlich und
 innerhalb **0–6000 mbar** sowie **0–5000 mm** liegen. Erst danach wird kaufmännisch
@@ -119,9 +145,10 @@ auf ganze mbar und 0,1 mm gerundet; Fehler brechen die gesamte Übernahme ab.
 Referenzbereichs- und Strömungswarnungen verhindern eine Übernahme innerhalb der
 SPS-Grenzen nicht und bleiben in den Ergebnissen sichtbar.
 
-Berechnung und Ergebnisübernahme ändern nur lokale Werte. Erst **Parameter übernehmen**
-schreibt separat auf die SPS. Lokal übernommene Varianten bleiben auch bei einem
-anschließenden SPS-Verbindungsaufbau erhalten. Während eines Versuchs sind
+Die Berechnung allein schreibt keine SPS-Parameter. Die ausdrückliche Ergebnisübernahme
+ändert den entsperrten Editor und löst bei verbundener SPS die Live-Übertragung auch
+während der normalen Bandfahrt aus. Ohne Verbindung bleiben übernommene Varianten lokal; beim anschließenden
+Verbindungsaufbau werden sie übertragen. Während eines Versuchs sind
 Berechnung und Übernahme gesperrt. Reiterwechsel erhalten Eingaben und Ergebnisse;
 Änderungen an STL, Einheit, Dichte, Posen, Modell-/Montagewerten oder Impulsdauern
 verwerfen die bisherigen Ergebnisse. Anschließend ist neu zu berechnen.
@@ -141,27 +168,56 @@ Eingaben verwerfen überholte Ergebnisse.
 
 ### Analytischer First Guess
 
-Das Modell berechnet alle passenden Kandidaten unabhängig von den Aktivierungen
-im Editor. Die vier Arrays bleiben mit jeweils sechs schaltbaren Düsen bestehen;
-die acht Strahlöffnungen einer Düse werden gemeinsam gespeist.
+Das Modell berechnet einen Vorschlag je passender Array-/Dreiergruppe unabhängig
+von den Aktivierungen im Editor. Die vier Arrays besitzen jeweils sechs schaltbare
+Düsen. Düsen **2/3 verlängern die acht Öffnungen von Düse 1**, Düsen **5/6** entsprechend
+die von Düse **4**. Jede Düse hat weiterhin acht gemeinsam gespeiste Öffnungen.
 
-| Arrays | Düse 1: Kippachse | Düse 4: Kippachse | Luftstrom |
+| Arrays | Düsen 1–3: Kippachse | Düsen 4–6: Kippachse | Luftstrom |
 | --- | --- | --- | --- |
 | 1, 3 | Z | X | +Y, normal zu Y=0 |
 | 2, 4 | Y | X | +Z, normal zu Z=0 |
 
 Diese Zuordnung und die Reihenmitte relativ zur Rinnenkante sind unter
-**Montage je Array/Düse** einstellbar. Beim ersten Start besitzen die Montagepositionen
-keinen erfundenen Standardwert: **Nicht angegeben** muss durch einen gemessenen Wert in mm
-ersetzt werden. Für Y/Z bezeichnet er die Mitte der quer zur Fahrtrichtung liegenden
+**Montage je Array/Düse** einstellbar. Die bestätigten Montagevorgaben sind
+**12,44 / 37,32 / 62,20 mm** für die Reihenmitten der Düsen 1–3. Düsen 4–6
+liegen jeweils **12,44 mm** quer zur Fahrtrichtung von der Rinnenkante entfernt.
+Die Außenkante des Düsenblocks ist mit der inneren Rinnenkante ausgerichtet;
+die Maße verwenden somit denselben Nullpunkt wie die Bauteilpositionierung.
+Für Y/Z bezeichnet die Reihenmitte die Mitte der quer zur Fahrtrichtung liegenden
 Lochreihe. Für X bezeichnet er den konstanten Y- beziehungsweise Z-Abstand der
 längs zur Fahrtrichtung liegenden Lochreihe von der Rinnenkante.
 
-Unter **Modellparameter** gelten zunächst acht Öffnungen mit 0,7 mm Durchmesser,
-vorläufig 24 mm Außenbreite, 25 mm Düse–Bauteil-Abstand, 20° Strahlöffnungswinkel,
-1 mm zusätzlichem Randabstand, c_d=1, c_m=0,47, c_c=1, κ=1,4, 1,013 bar absolutem
+Alle **24 Montagepositionen** werden einzeln erfasst. Für die entlang X liegenden
+Reihen zusätzlich den **X-Versatz der Reihenmitte zur Referenzdüse 4** eingeben;
+negative Werte sind erlaubt. Die gemessenen Vorgaben für Düse 4/5/6 sind
+**0 / 24,88 / 49,76 mm**; derselbe Düsenmittenabstand gilt für alle vier Arrays.
+Die Referenzdüse hat Versatz 0. Bei angepassten
+Achszuordnungen gilt entsprechend Düse 1 als Referenz der ersten Gruppe.
+**Fehlt ein Montagemaß einer Dreiergruppe, bleibt deren Arrayvorschlag gesperrt.**
+Achsen und Strahlrichtung müssen innerhalb einer Gruppe übereinstimmen.
+
+**Automatische Zuschaltung:** An jeder untersuchten Offsetposition wird geprüft,
+welche Düsen mindestens einen vollständigen Strahltreffer **einschließlich Randabstand**
+besitzen. Nur diese Düsen werden eingeschaltet. Bei einer 20 mm breiten bestrahlten
+Fläche kann das ausschließlich Düse 1 sein; bei größeren Flächen kommen Düse 2 und 3
+hinzu. Entscheidend sind die tatsächlichen Montagepositionen und die Mesh-Projektion
+einschließlich Aussparungen. Eine Düse mit ausschließlich Teiltreffern bleibt aus.
+Auch **nur Düse 2** ist möglich: Vorgänger werden nicht zwangsweise mitgeschaltet.
+Für eingeschaltete Düsen werden alle acht Öffnungen mit ihren Gewichten 0/0,5/1
+berücksichtigt. Die Kandidatentabelle nennt die automatisch ausgewählten Düsen.
+
+Unter **Modellparameter** gelten acht Öffnungen mit gemessenem **Radius 0,4 mm**,
+also **Durchmesser 0,8 mm**, und **2,8 mm Lochmittenabstand**.
+Der Abstand von erster zu letzter Lochmitte ist damit **7 × 2,8 = 19,6 mm**;
+die Außenbreite über die Öffnungskanten beträgt **19,6 + 0,8 = 20,4 mm**.
+Beide Breiten werden in der GUI getrennt angezeigt. Sie bezeichnen die Öffnungen,
+während **24,88 mm** der Abstand zwischen zwei Düsenmitten ist.
+Die weiteren Vorgaben bleiben 25 mm Düse–Bauteil-Abstand, 20° Strahlöffnungswinkel,
+1 mm zusätzlichem Randabstand und **5 mm zusätzlicher Offsetreserve entlang X**,
+c_d=1, c_m=0,47, c_c=1, κ=1,4, 1,013 bar absolutem
 Umgebungsdruck und g=9,81 m/s². Außenbreite und Teilung werden gekoppelt editiert;
-die anfängliche Teilung beträgt (24−0,7)/7 ≈ 3,329 mm. Der Konzentrizitätsfaktor
+der Abstand zwischen erster und letzter Lochmitte wird daraus berechnet. Der Konzentrizitätsfaktor
 c_c ist ein expliziter Faktor und wird nicht aus einem einzelnen Bauteilradius abgeleitet.
 
 **Startwerte speichern:** Unter **Modellparameter** übernimmt **Aktuelle Modellparameter
@@ -175,6 +231,12 @@ nicht als allgemeine Startwerte gespeichert. Die Vorgaben liegen unter Windows i
 `%APPDATA%\BiBaZuAutoTune\autotune_defaults.json`. Fehler beim Laden oder Speichern
 werden im jeweiligen Reiter angezeigt; eine beschädigte Datei wird nicht stillschweigend
 überschrieben. Weder das Speichern noch das Laden schreibt SPS-Parameter.
+Alte Standarddateien (Version 1, bisher acht Montagepositionen) werden beim Laden
+im Speicher auf 24 Positionen ergänzt. Gespeicherte Maße für Düse 1/4 bleiben erhalten;
+fehlende Positionen verwenden die bestätigten Montagevorgaben. Gespeicherte persönliche
+Modellparameter haben weiterhin Vorrang vor den Programmvorgaben. Erst bewusstes
+Speichern schreibt das erweiterte Standardformat Version 2. Testreihen,
+SPS-API und Pressure-Profilversion 13 bleiben unverändert.
 
 X zeigt entlang des Bandes bergauf (Standardneigung α=2,2°); die Y-/Z-Querneigung
 beträgt β=45°. In Anlagenkoordinaten gilt:
@@ -201,23 +263,49 @@ wird aus der Schnittfläche eines numerisch mit 512 Seiten angenäherten Strahlk
 und der Bauteilprojektion bestimmt. Eine bloße Tangentialberührung zählt nicht;
 Aussparungen werden aus dem vollständigen Mesh berücksichtigt.
 Der zusätzliche Randabstand dient der Offsetauslegung und wird nicht von der
-Trefferfläche abgezogen. Für Strahlradius r_j und wirksame Fläche gilt:
+Trefferfläche abgezogen. Unter **Modellparameter → Zusätzliche Offsetreserve entlang X**
+werden standardmäßig weitere **5 mm in beiden X-Richtungen** berücksichtigt.
+Ein Volltreffer für die Düsenfreigabe muss damit auch bei einer Verschiebung innerhalb
+dieser Reserve vollständig einschließlich Randabstand auf derselben Fläche liegen;
+Aussparungen dürfen dabei nicht überquert werden. Die Reserve wirkt nur längs zum Band,
+damit schmale Bauteile nicht wegen eines vergrößerten seitlichen Randabstands ausfallen.
+Treffergewichte und Hebelarme werden weiterhin an der tatsächlich gewählten Startposition
+berechnet. Die Einstellung wird mit den Modellstandards gespeichert; alte Standarddateien
+ohne dieses Feld erhalten beim Laden 5 mm, ohne dabei die Datei zu verändern.
+Mit **0 mm** gilt die bisherige Offsetauswahl.
+Passt die Reserve bei einem kurzen Bauteil nicht auf die Fläche, bleibt der Vorschlag
+mit einer Meldung gesperrt; die Reserve kann für dieses Bauteil reduziert werden.
+Die Reserve ist ein räumlicher Sicherheitsabstand, keine Korrektur eines abweichenden
+SPS-Nullpunkts oder eine Berechnung von Ventil- und Bandverzögerungen.
+Für Strahlradius r_j und wirksame Fläche gilt:
 
 ```text
 r_j = y * tan(θ_j/2) + d_0/2
-A_eff = sum(w_i * π * r_j²)
+A_eff = sum(w_i * π * r_j²)  # Nur Öffnungen eingeschalteter Düsen.
+ℓ_eff = sum(w_i * π * r_j² * ℓ_i) / A_eff
 ```
 
 Gewicht 0,5 trägt die halbe Strahlfläche bei; die Druckformel bleibt bestehen.
+Für mehrere Düsen ersetzt der flächengewichtete Hebelarm ℓ_eff den Einzelhebelarm.
+Die Einzelhebelarme ℓ_i folgen aus Auftreffpunkt, Kippkante und Strahlrichtung.
+Der feste Offsetbezug bleibt bei Düse 1 beziehungsweise 4, auch wenn diese aus ist;
+die erste aktive Öffnung wird nicht als neuer Nullpunkt verwendet.
 Die dreistufige Bewertung ist eine Näherung der Flächenüberdeckung und keine
 kontinuierliche Strömungssimulation. Der BiBaZu-Offset
 beginnt bei der ersten Berührung der Strahlhülle mit der Vorderkantenebene. Bei
 einer quer zu X liegenden Reihe gilt **x_Treffer = x_Vorderkante + r_j − Offset**.
+Für den Kraftangriff nahe der Hinterkante eines geraden 80-mm-Bauteils ergibt sich
+mit 1 mm Randabstand und 5 mm Offsetreserve ungefähr **80 − 1 − 5 = 74 mm**
+statt bisher 79 mm. Für die Gegenrichtung wandert die Position entsprechend von
+der Vorderkante weiter nach innen. Bei unregelmäßigen Konturen können andere Werte entstehen.
 Bei einer längs zu X liegenden Reihe wird zusätzlich die Position jeder Öffnung
 berücksichtigt. Der Schwerpunktabstand und der tatsächliche Hebelarm zur Kippkante
 werden getrennt ausgewiesen. Für Y/Z wird die äußerste Position mit positivem
-Hebelarm und mindestens einem vollständig abgedeckten Strahl einschließlich
-Randabstand gewählt. Für X wird die Mitte des längsten Offsetbereichs mit der
+Hebelarm gewählt, bei der zunächst möglichst viele Düsen mindestens einen vollständig
+abgedeckten Strahl einschließlich Randabstand besitzen. Unter diesen Positionen
+wird der größte positive wirksame Hebelarm gewählt, danach die höchste Gewichtssumme.
+So schaltet eine geringfügig schräge Bauteilkante nicht unnötig weitere Düsen aus.
+Für X wird die Mitte des längsten Offsetbereichs mit der
 maximalen Zahl solcher vollständig abgedeckten Strahlen gewählt. Der anschließend
 angezeigte Treffervektor und die Kraftberechnung verwenden die dreistufigen Gewichte.
 
@@ -233,7 +321,22 @@ p_g = p_0 − p_a
 Alle Rechnungen verwenden SI-Einheiten. Die Kandidatentabelle zeigt Offset in mm,
 Überdruck p_g in mbar und absoluten Druck p_0 in bar. Die Detailansicht zeigt
 Kippkante, J, Δh, Kraft, Treffervektor, die Auftreffpunkte und beide Mittelpunktbezüge.
+Die benötigte mittlere Gesamtkraft steht außerdem direkt in der Tabellenspalte
+**Kraft [N]**; bei fehlgeschlagener Berechnung erscheint dort **—**.
 Grüne Strahlkreise bedeuten Gewicht 1, orangefarbene Gewicht 0,5 und rote Gewicht 0.
+Das Trefferbild zeigt die **Förderbandrichtung (+X) von rechts nach links** als Pfeil.
+Größere X-Koordinaten liegen deshalb links im Bild; die Querrichtung Y beziehungsweise Z
+zeigt nach oben. Die Ansicht ist gegenüber der bisherigen Darstellung horizontal
+gespiegelt, die Anlagenkoordinaten und die Offsetberechnung bleiben unverändert.
+Welche Bauteilseite beaufschlagt wird, bestimmt der gewünschte Drehsinn zusammen
+mit der Kippkante und der Strahlrichtung. Bei umgekehrtem Drehsinn wechselt für
+Y-/Z-Drehungen die Kippkante und damit auch die Seite für den Kraftangriff.
+Ausgeschaltete Düsen werden im Trefferbild vollständig ausgeblendet und beeinflussen
+dessen Skalierung nicht. Die Ansicht zeigt die 8, 16 oder 24 Öffnungen der aktiven
+Düsen mit Beschriftung **Düse.Öffnung**. Die Details enthalten weiterhin alle Düsen
+zur Prüfung der Zuschaltgründe und unterscheiden geometrische
+Überdeckung und wirksame Gewichte und nennen Zuschaltgrund, Volltrefferzahl und
+Flächenbeitrag je Düse sowie die Einzelhebelarme.
 Die Tabelle zeigt die Summe der Treffergewichte einschließlich halber Beiträge.
 Die Details zeigen zusätzlich die tatsächliche Flächenüberdeckung je Öffnung und
 den Vektor der vollständig
@@ -248,7 +351,7 @@ deren Grenze bei etwa 0,905 bar Überdruck. Die SPS-Freigabe bis 6 bar erweitert
 Modellannahme nicht. Theoretische Werte außerhalb des Referenzbereichs, außerhalb der SPS-Grenzen oder
 oberhalb der kritischen Strömungsgrenze werden unverändert mit Status angezeigt.
 Der kritische Überdruck ist p_a * (((κ+1)/2)^(κ/(κ−1)) − 1). Es erfolgt keine Kappung.
-Die acht Strahlen werden als additive Einzelstrahlen bei gemeinsamem Druck
+Die Strahlen aller zugeschalteten Düsen werden als additive Einzelstrahlen bei gemeinsamem Druck
 angenommen. Strahlwechselwirkungen, Reibung und die Band-/Kippbewegung während
 des Impulses sind nicht zusätzlich modelliert: Treffer und Hebelarm gelten am Impulsbeginn.
 
@@ -377,6 +480,14 @@ Roadmap-Auswahl, Profile sowie den isolierten Programmstart. Ein echter
 Anlagenversuch einschließlich Kamera-/Lichtschrankensignal bleibt eine gesonderte
 Abnahme. `Strategy` und `RecipeStrategy` bleiben für Variantenreihen erhalten;
 `AutotunePipeline` ergänzt die unabhängigen Schnittstellen für die spätere Modellkette.
+
+In `analytical_model.py` führt `AnalyticalModel.evaluate` durch die Berechnung:
+Ausgangspose transformieren, Kippmechanik bestimmen, Strahlen platzieren und Druck
+berechnen. `tipping_mechanics` trennt die Suche der Kontaktkante von der Prüfung
+auf Durchdringung der Auflageflächen. Die Offsetsuche bewertet Positionen als
+benannte `ImpactSolution`-Ergebnisse; `_centered_offset` enthält die Auswahlregel
+für X und `_outermost_offset` die für Y/Z. Formeln, Treffergrenzen und numerische
+Toleranzen sind davon unabhängig und bleiben unverändert.
 
 Die portierten Roadmap-, Vorschau-, ADS- und Prozess-Lock-Bausteine stammen aus
 BiBaZu Pressure Control und werden hier unter derselben MIT-Lizenz gepflegt.

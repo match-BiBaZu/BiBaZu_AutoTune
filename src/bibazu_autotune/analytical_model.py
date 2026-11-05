@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import pairwise
 from typing import Literal, Protocol
 
 import numpy as np
@@ -19,7 +20,10 @@ from .orientation_animation import multiply
 from .trial_context import normalize_quaternion
 
 Axis = Literal["x", "y", "z"]
+CandidateKey = tuple[int, int]  # Array and reference nozzle (1 or 4).
 EPS = 1e-10
+DEFAULT_ROW_CENTER_M = 0.01244
+DEFAULT_NOZZLE_SPACING_M = 0.02488
 
 
 def _vector(values) -> Vector:
@@ -37,24 +41,42 @@ class NozzleMount:
     rotation_axis: Axis
     normal_axis: Axis
     row_center_m: float | None = None
+    longitudinal_offset_m: float | None = 0.0
 
 
 def default_mounts() -> tuple[NozzleMount, ...]:
-    return tuple(
-        NozzleMount(i, n, "x" if n == 4 else "z" if i % 2 else "y", "y" if i % 2 else "z")
-        for i in range(1, 5)
-        for n in (1, 4)
-    )
+    mounts = []
+    for array_index in range(1, 5):
+        normal_axis = "y" if array_index % 2 else "z"
+        tipping_axis = "z" if array_index % 2 else "y"
+        for nozzle_index in range(1, 7):
+            mounts.append(
+                NozzleMount(
+                    array_index,
+                    nozzle_index,
+                    tipping_axis if nozzle_index <= 3 else "x",
+                    normal_axis,
+                    row_center_m=DEFAULT_ROW_CENTER_M
+                    + (nozzle_index - 1) * DEFAULT_NOZZLE_SPACING_M
+                    if nozzle_index <= 3
+                    else DEFAULT_ROW_CENTER_M,
+                    longitudinal_offset_m=(nozzle_index - 4) * DEFAULT_NOZZLE_SPACING_M
+                    if nozzle_index >= 4
+                    else 0.0,
+                )
+            )
+    return tuple(mounts)
 
 
 @dataclass(frozen=True)
 class ModelConfiguration:
     opening_count: int = 8
-    diameter_m: float = 0.0007
-    pitch_m: float = (0.024 - 0.0007) / 7
+    diameter_m: float = 0.0008
+    pitch_m: float = 0.0028
     distance_m: float = 0.025
     spread_angle_deg: float = 20.0
     margin_m: float = 0.001
+    offset_safety_m: float = 0.005
     drag_coefficient: float = 1.0
     mesh_coefficient: float = 0.47
     concentricity_coefficient: float = 1.0
@@ -71,8 +93,13 @@ class ModelConfiguration:
     manual_angle_deg: float = 90.0
 
     @property
+    def center_span_m(self) -> float:
+        """Distance from the first opening center to the last opening center."""
+        return (self.opening_count - 1) * self.pitch_m
+
+    @property
     def outer_width_m(self) -> float:
-        return self.diameter_m + (self.opening_count - 1) * self.pitch_m
+        return self.diameter_m + self.center_span_m
 
     @property
     def jet_radius_m(self) -> float:
@@ -114,6 +141,8 @@ class ModelConfiguration:
             raise ValueError("Mittenabstand darf nicht kleiner als der Öffnungsdurchmesser sein.")
         if not math.isfinite(self.margin_m) or self.margin_m < 0:
             raise ValueError("Randabstand muss endlich und nichtnegativ sein.")
+        if not math.isfinite(self.offset_safety_m) or self.offset_safety_m < 0:
+            raise ValueError("Offsetreserve muss endlich und nichtnegativ sein.")
         validate_hit_thresholds(self.half_hit_lower, self.half_hit_upper)
         if not math.isfinite(self.spread_angle_deg) or not 0 <= self.spread_angle_deg < 180:
             raise ValueError("Strahlöffnungswinkel muss zwischen 0 und weniger als 180° liegen.")
@@ -132,11 +161,13 @@ class ModelConfiguration:
             raise ValueError("Drehwinkel muss ungleich null und höchstens 360° sein.")
         keys = set()
         for mount in self.mounts:
+            if type(mount.array_index) is not int or type(mount.nozzle_index) is not int:
+                raise ValueError("Array- und Düsenindex müssen Ganzzahlen sein.")
             key = mount.array_index, mount.nozzle_index
             if (
                 key in keys
                 or mount.array_index not in range(1, 5)
-                or mount.nozzle_index not in (1, 4)
+                or mount.nozzle_index not in range(1, 7)
             ):
                 raise ValueError("Doppelte oder ungültige Array-/Düsenkonfiguration.")
             keys.add(key)
@@ -148,6 +179,41 @@ class ModelConfiguration:
                 not math.isfinite(mount.row_center_m) or mount.row_center_m < 0
             ):
                 raise ValueError("Reihenmitte muss endlich und nichtnegativ sein.")
+            if mount.longitudinal_offset_m is not None and not math.isfinite(
+                mount.longitudinal_offset_m
+            ):
+                raise ValueError("Längsversatz muss endlich sein.")
+            if mount.nozzle_index in (1, 4) and mount.longitudinal_offset_m != 0:
+                raise ValueError("Die Referenzdüse 1 beziehungsweise 4 hat Längsversatz 0.")
+
+
+def nozzle_group(reference: NozzleMount, config: ModelConfiguration) -> tuple[NozzleMount, ...]:
+    """Require the complete measured group before enabling automatic selection."""
+    mounts = {m.nozzle_index: m for m in config.mounts if m.array_index == reference.array_index}
+    mounts[reference.nozzle_index] = reference
+    group = []
+    missing = []
+    for index in range(reference.nozzle_index, reference.nozzle_index + 3):
+        mount = mounts.get(index)
+        if mount is None:
+            missing.append(f"Düse {index}: Montageposition fehlt")
+            continue
+        if (mount.rotation_axis, mount.normal_axis) != (
+            reference.rotation_axis,
+            reference.normal_axis,
+        ):
+            raise ValueError(
+                f"Düse {index}: Achsen und Strahlrichtung müssen "
+                "innerhalb der Gruppe übereinstimmen."
+            )
+        if mount.row_center_m is None:
+            missing.append(f"Düse {index}: Reihenmitte fehlt")
+        if reference.rotation_axis == "x" and mount.longitudinal_offset_m is None:
+            missing.append(f"Düse {index}: Längsversatz fehlt")
+        group.append(mount)
+    if missing:
+        raise ValueError("Montageposition der Dreiergruppe unvollständig: " + "; ".join(missing))
+    return tuple(group)
 
 
 @dataclass(frozen=True)
@@ -275,63 +341,84 @@ class TippingMechanics:
 def tipping_mechanics(
     body: OrientedBody, turn: Turn, mount: NozzleMount, config: ModelConfiguration
 ) -> TippingMechanics:
-    axis_index, normal_index = "xyz".index(turn.axis), "xyz".index(mount.normal_axis)
-    transverse = next(i for i in range(3) if i not in (axis_index, normal_index))
-    normal = np.eye(3)[normal_index]
+    """Find the pivot, energy barrier and inertia for the requested rotation."""
+    pivot, edge_end = _contact_edge(body, turn, mount, config.contact_tolerance_m)
     axis = turn.direction
-    contact = body.vertices[np.abs(body.vertices[:, normal_index]) <= config.contact_tolerance_m]
-    coefficient = float(np.dot(np.cross(np.eye(3)[transverse], normal), axis))
-    bound = contact[:, transverse].min() if coefficient > 0 else contact[:, transverse].max()
-    edge = contact[np.abs(contact[:, transverse] - bound) <= config.contact_tolerance_m]
-    lo, hi = edge[:, axis_index].min(), edge[:, axis_index].max()
-    if hi - lo <= config.contact_tolerance_m:
-        raise ValueError("Keine eindeutige geradlinige Kontakt-/Kippkante entlang der Kippachse.")
-    pivot = np.zeros(3)
-    pivot[transverse], pivot[axis_index] = bound, lo
-    end = pivot.copy()
-    end[axis_index] = hi
-    r = body.center - pivot
-    perpendicular = r - axis * np.dot(axis, r)
-    tangent = np.cross(axis, r)
+    center_offset = body.center - pivot
+    perpendicular = center_offset - axis * np.dot(axis, center_offset)
+    tangent = np.cross(axis, center_offset)
     up = -config.gravity / config.gravity_m_s2
-    a, b = float(np.dot(up, perpendicular)), float(np.dot(up, tangent))
-    if b <= EPS:
+    vertical_component = float(np.dot(up, perpendicular))
+    tangential_component = float(np.dot(up, tangent))
+    if tangential_component <= EPS:
         raise ValueError("Keine positive anfängliche Energiebarriere in dieser Kipprichtung.")
-    theta = math.atan2(b, a) % (2 * math.pi)
-    if theta > math.radians(abs(turn.signed_angle_deg)) + 1e-7:
+
+    tipping_angle = math.atan2(tangential_component, vertical_component) % (2 * math.pi)
+    if tipping_angle > math.radians(abs(turn.signed_angle_deg)) + 1e-7:
         raise ValueError("Die vorgesehene Drehung erreicht den Kipppunkt an dieser Kante nicht.")
-    delta_h = a * (math.cos(theta) - 1) + b * math.sin(theta)
-    if delta_h <= EPS:
+    height_gain = vertical_component * (
+        math.cos(tipping_angle) - 1
+    ) + tangential_component * math.sin(tipping_angle)
+    if height_gain <= EPS:
         raise ValueError("Keine positive potentielle Energiebarriere vorhanden.")
-    # Check exact minima of every vertex's sinusoidal Y/Z trajectory up to the barrier.
-    relative = body.vertices - pivot
-    parallel = np.outer(relative @ axis, axis)
-    cosine = relative - parallel
-    sine = np.cross(axis, relative)
-    constant = pivot + parallel
-    for coord in (1, 2):
-        minima = np.minimum(
-            body.vertices[:, coord],
-            constant[:, coord]
-            + cosine[:, coord] * math.cos(theta)
-            + sine[:, coord] * math.sin(theta),
-        )
-        extrema = (np.arctan2(sine[:, coord], cosine[:, coord]) + math.pi) % (2 * math.pi)
-        inside = extrema <= theta
-        minima[inside] = np.minimum(
-            minima[inside],
-            constant[inside, coord] - np.hypot(cosine[inside, coord], sine[inside, coord]),
-        )
-        if np.min(minima) < -config.contact_tolerance_m:
-            raise ValueError("Kippbewegung durchdringt vor dem Kipppunkt eine Auflagefläche.")
+    _check_support_clearance(body.vertices, pivot, axis, tipping_angle, config.contact_tolerance_m)
+
     inertia = float(
         axis @ body.inertia @ axis + body.mass_kg * np.dot(perpendicular, perpendicular)
     )
     if not math.isfinite(inertia) or inertia <= 0:
         raise ValueError("Ungültiges Trägheitsmoment um die Kippkante.")
     return TippingMechanics(
-        _vector(pivot), (_vector(pivot), _vector(end)), inertia, delta_h, math.degrees(theta)
+        pivot_m=_vector(pivot),
+        edge_m=(_vector(pivot), _vector(edge_end)),
+        inertia_axis_kg_m2=inertia,
+        delta_h_m=height_gain,
+        tipping_angle_deg=math.degrees(tipping_angle),
     )
+
+
+def _contact_edge(body, turn, mount, tolerance):
+    """Select the straight contact edge on the side required by the turn."""
+    axis_index, normal_index = "xyz".index(turn.axis), "xyz".index(mount.normal_axis)
+    transverse = next(i for i in range(3) if i not in (axis_index, normal_index))
+    normal = np.eye(3)[normal_index]
+    axis = turn.direction
+    contact = body.vertices[np.abs(body.vertices[:, normal_index]) <= tolerance]
+    coefficient = float(np.dot(np.cross(np.eye(3)[transverse], normal), axis))
+    bound = contact[:, transverse].min() if coefficient > 0 else contact[:, transverse].max()
+    edge = contact[np.abs(contact[:, transverse] - bound) <= tolerance]
+    lo, hi = edge[:, axis_index].min(), edge[:, axis_index].max()
+    if hi - lo <= tolerance:
+        raise ValueError("Keine eindeutige geradlinige Kontakt-/Kippkante entlang der Kippachse.")
+    pivot = np.zeros(3)
+    pivot[transverse], pivot[axis_index] = bound, lo
+    end = pivot.copy()
+    end[axis_index] = hi
+    return pivot, end
+
+
+def _check_support_clearance(vertices, pivot, axis, tipping_angle, tolerance):
+    """Check each vertex's exact lowest Y/Z position up to the energy barrier."""
+    relative = vertices - pivot
+    parallel = np.outer(relative @ axis, axis)
+    cosine = relative - parallel
+    sine = np.cross(axis, relative)
+    constant = pivot + parallel
+    for coord in (1, 2):
+        minima = np.minimum(
+            vertices[:, coord],
+            constant[:, coord]
+            + cosine[:, coord] * math.cos(tipping_angle)
+            + sine[:, coord] * math.sin(tipping_angle),
+        )
+        extrema = (np.arctan2(sine[:, coord], cosine[:, coord]) + math.pi) % (2 * math.pi)
+        inside = extrema <= tipping_angle
+        minima[inside] = np.minimum(
+            minima[inside],
+            constant[inside, coord] - np.hypot(cosine[inside, coord], sine[inside, coord]),
+        )
+        if np.min(minima) < -tolerance:
+            raise ValueError("Kippbewegung durchdringt vor dem Kipppunkt eine Auflagefläche.")
 
 
 @dataclass(frozen=True)
@@ -347,6 +434,11 @@ class ImpactSolution:
     silhouette_rings: tuple[tuple[tuple[float, float], ...], ...]
     full_weights: tuple[float, ...] = ()
     coverage_fractions: tuple[float, ...] = ()
+    active_nozzles: tuple[int, ...] = ()
+    opening_ids: tuple[tuple[int, int], ...] = ()
+    geometric_weights: tuple[float, ...] = ()
+    lever_arms_m: tuple[float, ...] = ()
+    offset_safety_m: float = 0.0
 
 
 def jet_overlap_fractions(shape, centers, radius_m: float) -> tuple[float, ...]:
@@ -385,7 +477,15 @@ def validate_hit_thresholds(lower, upper):
 
 def coverage_weights(fractions, lower=0.25, upper=0.75) -> tuple[float, ...]:
     validate_hit_thresholds(lower, upper)
-    return tuple(0.0 if f < lower else 0.5 if f < upper else 1.0 for f in fractions)
+    weights = []
+    for fraction in fractions:
+        if fraction < lower:
+            weights.append(0.0)
+        elif fraction < upper:
+            weights.append(0.5)
+        else:
+            weights.append(1.0)
+    return tuple(weights)
 
 
 def jet_hit_weights(
@@ -427,106 +527,188 @@ class OffsetEstimator(Protocol):
 
 class AutomaticOffsetEstimator:
     def estimate(self, body, turn, mount, mechanics, config):
-        if mount.row_center_m is None:
-            raise ValueError("Montageposition der Reihenmitte relativ zur Rinnenkante fehlt.")
+        """Place the nozzle row, select an offset and report its jet contributions."""
+        group = nozzle_group(mount, config)
         radius = config.jet_radius_m
         clearance = radius + config.margin_m
         shape = body.silhouette(mount.normal_axis)
         # A tiny conservative allowance also bounds GEOS's polygonal arc approximation.
-        safe = shape.buffer(-clearance / math.cos(math.pi / 512), quad_segs=128)
-        if safe.is_empty:
+        safe_area = shape.buffer(-clearance / math.cos(math.pi / 512), quad_segs=128)
+        if safe_area.is_empty:
             raise ValueError(
                 "Kein vollständiger Strahltreffer mit dem eingestellten Randabstand möglich."
             )
         row = (np.arange(config.opening_count) - (config.opening_count - 1) / 2) * config.pitch_m
         along_x = turn.axis == "x"
         transverse = 2 if mount.normal_axis == "y" else 1
-        locations = (
-            np.full(config.opening_count, mount.row_center_m)
-            if along_x
-            else mount.row_center_m + row
+        locations = np.concatenate(
+            [
+                np.full(config.opening_count, m.row_center_m) if along_x else m.row_center_m + row
+                for m in group
+            ]
         )
         front = float(body.vertices[:, 0].max())
-        bases = front + radius + (row - row.min() if along_x else np.zeros(config.opening_count))
-        domains = []
-        xmin, _, xmax, _ = shape.bounds
-        for base, location in zip(bases, locations, strict=True):
-            cuts = safe.intersection(LineString([(xmin - 1, location), (xmax + 1, location)]))
-            domains.append(
-                [(max(0.0, base - hi), base - lo) for lo, hi in _intervals(cuts) if base - lo >= 0]
-            )
-        boundaries = sorted(
-            {v for intervals in domains for interval in intervals for v in interval}
+        # Never rebase to the first active nozzle: nozzle 1/4 remains the timing reference.
+        bases = np.concatenate(
+            [
+                front
+                + radius
+                + (
+                    m.longitudinal_offset_m + row - row.min()
+                    if along_x
+                    else np.zeros(config.opening_count)
+                )
+                for m in group
+            ]
         )
+        opening_ids = tuple(
+            (m.nozzle_index, opening + 1) for m in group for opening in range(config.opening_count)
+        )
+        intervals = _safe_x_intervals(safe_area, locations, shape.bounds, config.offset_safety_m)
+        boundaries = _offset_boundaries(bases, intervals)
         if not boundaries:
             raise ValueError(
-                "Keine Öffnung trifft bei dieser Reihenlage vollständig auf das Bauteil."
+                "Keine Öffnung trifft bei dieser Reihenlage vollständig mit Randabstand "
+                "und Offsetreserve auf das Bauteil."
             )
         axis, normal = turn.direction, np.eye(3)["xyz".index(mount.normal_axis)]
         pivot = np.array(mechanics.pivot_m)
         boundary = shape.boundary
+        center = (body.vertices.min(axis=0) + body.vertices.max(axis=0)) / 2
+        rings = _rings(shape)
 
         @lru_cache(maxsize=None)
         def evaluate(offset):
-            points = np.zeros((config.opening_count, 3))
+            points = np.zeros((len(opening_ids), 3))
             points[:, 0], points[:, transverse] = bases - offset, locations
             centers = tuple(zip(points[:, 0], locations, strict=True))
             coverage = jet_overlap_fractions(shape, centers, radius)
-            weights = coverage_weights(coverage, config.half_hit_lower, config.half_hit_upper)
-            full_weights = tuple(
-                float(
-                    shape.covers(point := Point(x, y))
-                    and boundary.distance(point) >= clearance - EPS
-                )
-                for x, y in centers
+            geometric_weights = coverage_weights(
+                coverage, config.half_hit_lower, config.half_hit_upper
             )
-            lever = float(np.dot(np.cross(points[0] - pivot, normal), axis))
-            return points, weights, lever, full_weights, coverage
+            full_weights = []
+            for (x, y), allowed in zip(centers, intervals, strict=True):
+                point = Point(x, y)
+                full_hit = shape.covers(point) and boundary.distance(point) >= clearance - EPS
+                if config.offset_safety_m > 0:
+                    full_hit = full_hit and any(lo - EPS <= x <= hi + EPS for lo, hi in allowed)
+                full_weights.append(float(full_hit))
+            active_nozzles = tuple(
+                m.nozzle_index
+                for i, m in enumerate(group)
+                if any(full_weights[i * config.opening_count : (i + 1) * config.opening_count])
+            )
+            weights = tuple(
+                weight if nozzle in active_nozzles else 0.0
+                for (nozzle, _), weight in zip(opening_ids, geometric_weights, strict=True)
+            )
+            levers = np.cross(points - pivot, normal) @ axis
+            weight_sum = sum(weights)
+            contributing_levers = levers[np.asarray(weights) > 0]
+            if not weight_sum:
+                lever = 0.0
+            elif np.all(contributing_levers == contributing_levers[0]):
+                lever = float(contributing_levers[0])
+            else:
+                lever = float(np.dot(weights, levers) / weight_sum)
+            return ImpactSolution(
+                offset_m=float(offset),
+                weights=weights,
+                points_m=tuple(_vector(point) for point in points),
+                lever_arm_m=lever,
+                area_eff_m2=sum(weights) * math.pi * radius**2,
+                jet_radius_m=radius,
+                center_offsets_m=tuple(_vector(point) for point in points - center),
+                com_offsets_m=tuple(_vector(point) for point in points - body.center),
+                silhouette_rings=rings,
+                full_weights=tuple(full_weights),
+                coverage_fractions=coverage,
+                active_nozzles=active_nozzles,
+                opening_ids=opening_ids,
+                geometric_weights=geometric_weights,
+                lever_arms_m=tuple(map(float, levers)),
+                offset_safety_m=config.offset_safety_m,
+            )
 
-        spans = [(lo, hi) for lo, hi in zip(boundaries[:-1], boundaries[1:], strict=True)]
         if along_x:
-            regions = [(lo, hi, sum(evaluate((lo + hi) / 2)[3])) for lo, hi in spans]
-            regions += [(v, v, sum(evaluate(v)[3])) for v in boundaries]
-            best = max(n for _, _, n in regions)
-            if best == 0:
-                raise ValueError("Keine vollständigen Strahltreffer vorhanden.")
-            merged = []
-            for lo, hi, _ in sorted(r for r in regions if r[2] == best):
-                if merged and lo <= merged[-1][1] + EPS:
-                    merged[-1] = (merged[-1][0], max(hi, merged[-1][1]))
-                else:
-                    merged.append((lo, hi))
-            lo, hi = max(merged, key=lambda span: (round(span[1] - span[0], 12), -span[0]))
-            offset = (lo + hi) / 2
+            offset = _centered_offset(boundaries, evaluate)
         else:
-            choices = boundaries + [(lo + hi) / 2 for lo, hi in spans]
-            viable = [
-                (evaluate(v)[2], sum(evaluate(v)[1]), -v, v)
-                for v in choices
-                if sum(evaluate(v)[3]) > 0 and evaluate(v)[2] > EPS
-            ]
-            if not viable:
-                raise ValueError(
-                    "Kein vollständiger Treffer mit positivem Hebelarm in Zielrichtung."
-                )
-            offset = max(viable)[-1]
-        points, weights, lever, full_weights, coverage = evaluate(offset)
-        if lever <= EPS or not any(weights):
+            offset = _outermost_offset(boundaries, evaluate)
+        impact = evaluate(offset)
+        if impact.lever_arm_m <= EPS or not any(impact.weights):
             raise ValueError("Strahlen erzeugen kein positives Kippmoment in Zielrichtung.")
-        center = (body.vertices.min(axis=0) + body.vertices.max(axis=0)) / 2
-        return ImpactSolution(
-            float(offset),
-            weights,
-            tuple(_vector(point) for point in points),
-            lever,
-            sum(weights) * math.pi * radius**2,
-            radius,
-            tuple(_vector(point) for point in points - center),
-            tuple(_vector(point) for point in points - body.center),
-            _rings(shape),
-            full_weights,
-            coverage,
+        return impact
+
+
+def _safe_x_intervals(safe_area, locations, bounds, reserve):
+    """Keep each full jet inside its own surface interval for +/- X uncertainty."""
+    xmin, _, xmax, _ = bounds
+    intervals = []
+    for location in locations:
+        row_line = LineString([(xmin - 1, location), (xmax + 1, location)])
+        intervals.append(
+            tuple(
+                (start + reserve, end - reserve)
+                for start, end in _intervals(safe_area.intersection(row_line))
+                if end - start >= 2 * reserve
+            )
         )
+    return intervals
+
+
+def _offset_boundaries(bases, intervals):
+    """Convert each opening's allowed X intervals to nonnegative belt offsets."""
+    boundaries = set()
+    for base, allowed in zip(bases, intervals, strict=True):
+        for x_start, x_end in allowed:
+            offset_start = max(0.0, base - x_end)
+            offset_end = base - x_start
+            if offset_end >= 0:
+                boundaries.update((offset_start, offset_end))
+    return sorted(boundaries)
+
+
+def _centered_offset(boundaries, evaluate):
+    """For X turns, center the longest region with the most full hits."""
+    regions = []
+    for start, end in pairwise(boundaries):
+        hits = sum(evaluate((start + end) / 2).full_weights)
+        regions.append((start, end, hits))
+    for offset in boundaries:
+        regions.append((offset, offset, sum(evaluate(offset).full_weights)))
+    best_hits = max(hits for _, _, hits in regions)
+    if best_hits == 0:
+        raise ValueError("Keine vollständigen Strahltreffer vorhanden.")
+
+    # Adjacent optimal regions belong to the same continuous offset interval.
+    merged = []
+    for start, end, hits in sorted(regions):
+        if hits != best_hits:
+            continue
+        if merged and start <= merged[-1][1] + EPS:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    start, end = max(merged, key=lambda span: (round(span[1] - span[0], 12), -span[0]))
+    return (start + end) / 2
+
+
+def _outermost_offset(boundaries, evaluate):
+    """For Y/Z turns, enable all usable rows before maximizing their leverage."""
+    choices = boundaries + [(start + end) / 2 for start, end in pairwise(boundaries)]
+    best_offset, best_score = None, None
+    for offset in choices:
+        impact = evaluate(offset)
+        if sum(impact.full_weights) == 0 or impact.lever_arm_m <= EPS:
+            continue
+        # A slightly slanted edge must not sacrifice two usable nozzle rows for
+        # a microscopic gain in lever arm. The full-hit requirement stays intact.
+        score = (len(impact.active_nozzles), impact.lever_arm_m, sum(impact.weights), -offset)
+        if best_score is None or score > best_score:
+            best_offset, best_score = offset, score
+    if best_offset is None:
+        raise ValueError("Kein vollständiger Treffer mit positivem Hebelarm in Zielrichtung.")
+    return best_offset
 
 
 @dataclass(frozen=True)
@@ -578,6 +760,7 @@ class PressureModel(Protocol):
 
 class AnalyticalPressureModel:
     def predict(self, body, mechanics, impact, pulse_ms, config):
+        """Compute tipping force, invert the drag equation and report model limits."""
         config.validate()
         if any(
             not math.isfinite(v) or v <= 0
@@ -588,42 +771,49 @@ class AnalyticalPressureModel:
             )
         if not math.isfinite(pulse_ms) or pulse_ms <= 0 or impact.lever_arm_m <= 0:
             raise ValueError("Impulsdauer und Hebelarm müssen positiv sein.")
-        force = math.sqrt(
+        pulse_seconds = pulse_ms / 1000
+        force_n = math.sqrt(
             2
             * mechanics.inertia_axis_kg_m2
             * body.mass_kg
             * config.gravity_m_s2
             * mechanics.delta_h_m
-        ) / (pulse_ms / 1000 * impact.lever_arm_m)
+        ) / (pulse_seconds * impact.lever_arm_m)
         factor = drag_factor(impact.area_eff_m2, config)
+        pressure_exponent = config.kappa / (config.kappa - 1)
         try:
-            gauge = config.ambient_pa * math.expm1(
-                config.kappa / (config.kappa - 1) * math.log1p(force / factor)
+            # log1p/expm1 keep equation (7) accurate for small pressure differences.
+            gauge_pa = config.ambient_pa * math.expm1(
+                pressure_exponent * math.log1p(force_n / factor)
             )
-            critical = config.ambient_pa * math.expm1(
-                config.kappa / (config.kappa - 1) * math.log((config.kappa + 1) / 2)
+            critical_pa = config.ambient_pa * math.expm1(
+                pressure_exponent * math.log((config.kappa + 1) / 2)
             )
         except OverflowError as exc:
             raise ValueError(
                 "Berechneter Druck liegt außerhalb des endlichen Zahlenbereichs."
             ) from exc
-        if not all(math.isfinite(v) for v in (force, gauge, critical)):
+        if not all(math.isfinite(v) for v in (force_n, gauge_pa, critical_pa)):
             raise ValueError("Druckberechnung liefert keine endlichen Werte.")
         warnings = []
-        if not 5000 <= gauge <= 80000:
+        if not 5000 <= gauge_pa <= 80000:
             warnings.append(
                 "Außerhalb des Referenzbereichs des Ausgangsmodells (0,05–0,80 bar Überdruck)"
             )
-        if gauge >= critical:
+        if gauge_pa >= critical_pa:
             warnings.append(
                 "Nicht abgeschnürte Strömung nicht erfüllt; mathematische Extrapolation"
             )
-        if not 0 <= gauge / 100 <= 6000:
+        if not 0 <= gauge_pa / 100 <= 6000:
             warnings.append("Außerhalb der SPS-Druckgrenzen 0–6000 mbar")
         if not 0 <= impact.offset_m * 1000 <= 5000:
             warnings.append("Außerhalb der SPS-Offsetgrenzen 0–5000 mm")
         return PressurePrediction(
-            force, config.ambient_pa + gauge, gauge, critical, tuple(warnings)
+            force_n=force_n,
+            absolute_pa=config.ambient_pa + gauge_pa,
+            gauge_pa=gauge_pa,
+            critical_gauge_pa=critical_pa,
+            warnings=tuple(warnings),
         )
 
 
@@ -640,6 +830,17 @@ class CandidateResult:
     center_m: Vector | None = None
     inertia_cm_kg_m2: Tensor | None = None
 
+    @property
+    def key(self) -> CandidateKey:
+        return self.mount.array_index, self.mount.nozzle_index
+
+    @property
+    def nozzle_label(self) -> str:
+        active = self.impact.active_nozzles if self.impact else ()
+        if not active:
+            return f"Gruppe {self.mount.nozzle_index}–{self.mount.nozzle_index + 2}"
+        return ("Düse " if len(active) == 1 else "Düsen ") + "+".join(map(str, active))
+
 
 class AnalyticalModel:
     def __init__(
@@ -649,10 +850,13 @@ class AnalyticalModel:
         self.pressure = pressure or AnalyticalPressureModel()
 
     def evaluate(self, analysis, context, parameters, config, *, calculate=True):
+        """For each matching mount: mechanics → jet placement → pressure proposal."""
         config.validate()
         turn = resolve_turn(context, config)
         pulses = {a["index"]: a["pulse_duration_ms"] for a in parameters["arrays"]}
-        mounts = [m for m in config.mounts if m.rotation_axis == turn.axis]
+        mounts = [
+            m for m in config.mounts if m.nozzle_index in (1, 4) and m.rotation_axis == turn.axis
+        ]
         if not mounts:
             raise ValueError(
                 "Keine passende Array-/Düsenkombination für diese Kippachse konfiguriert."
@@ -660,15 +864,17 @@ class AnalyticalModel:
         body = None
         results = []
         for mount in mounts:
+            pulse_ms = pulses[mount.array_index]
             try:
-                if mount.row_center_m is None:
-                    raise ValueError(
-                        "Montageposition der Reihenmitte relativ zur Rinnenkante fehlt."
-                    )
+                nozzle_group(mount, config)
                 if not calculate:
                     results.append(
                         CandidateResult(
-                            mount, turn, pulses[mount.array_index], "pending", "Berechnung starten"
+                            mount=mount,
+                            turn=turn,
+                            pulse_ms=pulse_ms,
+                            status="pending",
+                            message="Berechnung starten",
                         )
                     )
                     continue
@@ -676,25 +882,30 @@ class AnalyticalModel:
                     body = orient_body(analysis, context)
                 mechanics = tipping_mechanics(body, turn, mount, config)
                 impact = self.offset.estimate(body, turn, mount, mechanics, config)
-                pressure = self.pressure.predict(
-                    body, mechanics, impact, pulses[mount.array_index], config
-                )
+                pressure = self.pressure.predict(body, mechanics, impact, pulse_ms, config)
                 results.append(
                     CandidateResult(
-                        mount,
-                        turn,
-                        pulses[mount.array_index],
-                        "outside_model" if pressure.warnings else "ready",
-                        "; ".join(pressure.warnings) or "Berechnet innerhalb des Modellbereichs",
-                        mechanics,
-                        impact,
-                        pressure,
-                        _vector(body.center),
-                        _tensor(body.inertia),
+                        mount=mount,
+                        turn=turn,
+                        pulse_ms=pulse_ms,
+                        status="outside_model" if pressure.warnings else "ready",
+                        message="; ".join(pressure.warnings)
+                        or "Berechnet innerhalb des Modellbereichs",
+                        mechanics=mechanics,
+                        impact=impact,
+                        pressure=pressure,
+                        center_m=_vector(body.center),
+                        inertia_cm_kg_m2=_tensor(body.inertia),
                     )
                 )
             except ValueError as exc:
                 results.append(
-                    CandidateResult(mount, turn, pulses[mount.array_index], "blocked", str(exc))
+                    CandidateResult(
+                        mount=mount,
+                        turn=turn,
+                        pulse_ms=pulse_ms,
+                        status="blocked",
+                        message=str(exc),
+                    )
                 )
         return tuple(results)

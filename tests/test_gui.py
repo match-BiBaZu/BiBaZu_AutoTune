@@ -240,7 +240,8 @@ def test_manual_controls_without_roadmap_or_camera(offline_window):
     assert not services.trials
     window.request_conveyor(True)
     wait(lambda: services.moving and not window.motor_pending)
-    wait(lambda: not window.apply_parameters_button.isEnabled())
+    assert window.apply_parameters_button.isEnabled()
+    assert window.editor.isEnabled()
     assert window.conveyor_stop_button.isEnabled()
     window.request_conveyor(False)
     wait(lambda: not services.moving and window.apply_parameters_button.isEnabled())

@@ -22,6 +22,15 @@ def check_candidate(candidate: CandidateResult):
         raise ValueError("Berechneter Offset liegt außerhalb der SPS-Grenzen 0–5000 mm.")
     if candidate.mount.array_index not in range(1, 5) or candidate.mount.nozzle_index not in (1, 4):
         raise ValueError("Ungültige Array-/Düsenkombination.")
+    active = candidate.impact.active_nozzles
+    group = set(range(candidate.mount.nozzle_index, candidate.mount.nozzle_index + 3))
+    if (
+        not active
+        or any(type(n) is not int for n in active)
+        or len(set(active)) != len(active)
+        or any(n not in group for n in active)
+    ):
+        raise ValueError("Keine gültige automatische Düsenwahl vorhanden.")
 
 
 def candidate_parameters(parameters: dict, candidate: CandidateResult) -> dict:
@@ -43,6 +52,6 @@ def candidate_parameters(parameters: dict, candidate: CandidateResult) -> dict:
         )
     )
     array["enabled"] = True
-    array["nozzles_enabled"] = [i == candidate.mount.nozzle_index for i in range(1, 7)]
+    array["nozzles_enabled"] = [i in candidate.impact.active_nozzles for i in range(1, 7)]
     array["conveyor_velocity_delay"] = True
     return validate_parameters(result)

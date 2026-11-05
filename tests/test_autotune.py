@@ -76,7 +76,13 @@ def test_missing_mount_blocks_pressure_without_side_effects(tmp_path):
     analysis = analyze_stl(write_box(tmp_path / "box.stl"), density=2700)
     candidate = parameters()
     before = copy.deepcopy(candidate)
-    result = AutotunePipeline().prepare(analysis, manual(analysis.sha256), candidate)
+    missing_mounts = replace(
+        ModelConfiguration(),
+        mounts=tuple(replace(m, row_center_m=None) for m in ModelConfiguration().mounts),
+    )
+    result = AutotunePipeline().prepare(
+        analysis, manual(analysis.sha256), candidate, missing_mounts
+    )
     assert not result.missing
     assert result.pulse.value == {1: 50, 2: 50, 3: 50, 4: 50}
     assert result.pulse.source == "manual"
@@ -112,18 +118,23 @@ def test_replacement_stages_obey_dependencies(tmp_path):
     class ML:
         def refine(self, request, pressures_mbar):
             calls.append("ml")
-            assert pressures_mbar == {2: 120, 4: 120}
-            return StageResult("ready", {2: 125.0, 4: 125.0})
+            assert pressures_mbar == {(2, 1): 120, (4, 1): 120}
+            return StageResult("ready", {(2, 1): 125.0, (4, 1): 125.0})
 
     pipeline = AutotunePipeline(offset=Offset(), pressure=Pressure(), ml=ML())
-    result = pipeline.prepare(analysis, manual(analysis.sha256), parameters())
+    missing_mounts = replace(
+        ModelConfiguration(),
+        mounts=tuple(replace(m, row_center_m=None) for m in ModelConfiguration().mounts),
+    )
+    result = pipeline.prepare(analysis, manual(analysis.sha256), parameters(), missing_mounts)
     assert calls == []  # Missing mounts prevent downstream model calls.
     assert result.pressure.value is None
-    config = ModelConfiguration(uphill_deg=0, cross_slope_deg=0)
+    # This stage-substitution reference uses a 20-mm part and the original offsets.
+    config = ModelConfiguration(uphill_deg=0, cross_slope_deg=0, offset_safety_m=0)
     config = replace(config, mounts=tuple(replace(m, row_center_m=0.015) for m in config.mounts))
     result = pipeline.prepare(analysis, manual(analysis.sha256), parameters(), config)
     assert calls == ["offset", "pressure", "offset", "pressure", "ml"]
-    assert result.ml.value == {2: 125, 4: 125}
+    assert result.ml.value == {(2, 1): 125, (4, 1): 125}
 
 
 def test_complete_manual_trial_logs_only_pose_context_and_starts_new_runs(tmp_path):

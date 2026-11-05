@@ -10,7 +10,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import QPointF, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QPointF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PyQt6.QtWidgets import (
     QApplication,
@@ -165,6 +165,7 @@ class AnglePlot(QWidget):
 
 class ParameterEditor(QWidget):
     pulse_changed = pyqtSignal()
+    parameters_changed = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -222,6 +223,19 @@ class ParameterEditor(QWidget):
         layout.addWidget(self.table)
         for row in self.rows:
             row["pulse_duration_ms"].valueChanged.connect(self.on_pulse_changed)
+            for key in LIMITS:
+                row[key].valueChanged.connect(self.on_parameters_changed)
+            for checkbox in [
+                row["enabled"],
+                row["conveyor_velocity_delay"],
+                *row["nozzles_enabled"],
+            ]:
+                checkbox.toggled.connect(self.on_parameters_changed)
+        self.speed.valueChanged.connect(self.on_parameters_changed)
+
+    def on_parameters_changed(self):
+        if not self.setting_parameters:
+            self.parameters_changed.emit()
 
     def on_pulse_changed(self):
         if not self.setting_parameters:
@@ -229,6 +243,10 @@ class ParameterEditor(QWidget):
 
     def set_parameters(self, parameters):
         parameters = validate_parameters(parameters)
+        try:
+            previous = self.parameters()
+        except ValueError:
+            previous = None
         previous_pulses = tuple(row["pulse_duration_ms"].value() for row in self.rows)
         self.setting_parameters = True
         self.speed.setValue(parameters["conveyor_speed_mm_per_sec"])
@@ -244,6 +262,8 @@ class ParameterEditor(QWidget):
         self.setting_parameters = False
         if previous_pulses != tuple(row["pulse_duration_ms"].value() for row in self.rows):
             self.pulse_changed.emit()
+        if previous != parameters:
+            self.parameters_changed.emit()
 
     def parameters(self):
         arrays = []
@@ -278,6 +298,16 @@ class MainWindow(QMainWindow):
         self.camera_connected = False
         self.motor_pending = False
         self.pressure_state = {}
+        self.pending_parameters = None
+        self.sent_parameters = None
+        self.confirmed_parameters = None
+        self.parameter_error = ""
+        self.syncing_parameters = False
+        self.parameters_locked = False
+        self.live_timer = QTimer(self)
+        self.live_timer.setSingleShot(True)
+        self.live_timer.setInterval(250)
+        self.live_timer.timeout.connect(self.flush_live_parameters)
         self.profile_template = {}
         self.profile_directory = Path(output_dir).parent / "profiles"
         root = QWidget()
@@ -320,9 +350,7 @@ class MainWindow(QMainWindow):
         self.camera_connect_button = self.button(
             actions, "Kamera verbinden", lambda: self.worker.submit("connect_camera")
         )
-        self.release_button = self.button(
-            actions, "Sitzung beenden", lambda: self.worker.submit("release")
-        )
+        self.release_button = self.button(actions, "Sitzung beenden", self.release_session)
         layout.addLayout(actions)
         actions = QHBoxLayout()
         self.roadmap_button = self.button(actions, "Roadmap auswählen", self.load_roadmap)
@@ -343,13 +371,11 @@ class MainWindow(QMainWindow):
             autotune_actions, "Ergebnisse in Ausgangswerte schreiben", self.import_autotune_result
         )
         self.import_button.setToolTip(
-            "Ausgewählten Kandidaten nur in den lokalen Editor übernehmen. "
-            "Parameter übernehmen schreibt anschließend separat auf die SPS."
+            "Ausgewählten Kandidaten in den Editor übernehmen. Bei verbundener SPS "
+            "werden gültige Änderungen auch während der Bandfahrt automatisch geschrieben."
         )
-        layout.addLayout(autotune_actions)
         self.autotune_status = QLabel("Autotune-Einstellungen prüfen.")
         self.autotune_status.setWordWrap(True)
-        layout.addWidget(self.autotune_status)
         splitter = QSplitter()
         self.variant_list = QListWidget()
         self.variant_list.currentRowChanged.connect(self.select_variant)
@@ -372,12 +398,25 @@ class MainWindow(QMainWindow):
         )
         layout.addLayout(trial_actions)
         conveyor_actions = QHBoxLayout()
+        self.parameter_lock_button = self.button(
+            conveyor_actions, "Parameter sperren", self.set_parameters_locked
+        )
+        self.parameter_lock_button.setCheckable(True)
+        self.parameter_lock_button.setToolTip(
+            "Editor, Variantenwechsel und Parameterübernahmen sperren. "
+            "Noch nicht gesendete Änderungen warten bis zum Entsperren. "
+            "Ein bereits laufender Schreibauftrag wird abgeschlossen; "
+            "die Bandbedienung bleibt verfügbar."
+        )
         self.apply_parameters_button = self.button(
             conveyor_actions, "Parameter übernehmen", self.apply_parameters
         )
         self.apply_parameters_button.setToolTip(
-            "Array-Parameter und Bandgeschwindigkeit auf die SPS schreiben und zurücklesen."
+            "Jetzt schreiben und zurücklesen. Änderungen werden auch automatisch nach "
+            "einer kurzen Eingabepause übertragen, auch während der Bandfahrt."
         )
+        self.live_status = QLabel("SPS-Live: offline · Änderungen bleiben lokal")
+        layout.addWidget(self.live_status)
         self.conveyor_start_button = self.button(
             conveyor_actions, "Band starten", lambda: self.request_conveyor(True)
         )
@@ -389,6 +428,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(conveyor_actions)
         self.output_tabs = QTabWidget()
         self.autotune_results = CalculationResultsWidget()
+        self.autotune_results.layout().insertLayout(0, autotune_actions)
+        self.autotune_results.layout().insertWidget(1, self.autotune_status)
         self.output_tabs.addTab(self.autotune_results, "Autotune-Ergebnisse")
         camera_page = QWidget()
         camera_layout = QVBoxLayout(camera_page)
@@ -425,11 +466,82 @@ class MainWindow(QMainWindow):
         self.autotune_settings.calculation_state_changed.connect(self.update_autotune_controls)
         self.autotune_results.selection_changed.connect(self.update_autotune_controls)
         self.editor.pulse_changed.connect(self.autotune_settings.refresh_status)
+        self.editor.parameters_changed.connect(self.on_editor_changed)
         self.autotune_settings.refresh_status()
         self.update_controls()
 
     def open_autotune_settings(self):
         self.pages.setCurrentWidget(self.autotune_settings)
+
+    def can_write_parameters(self):
+        return (
+            self.state == "ready"
+            and self.pressure_state.get("connected", False)
+            and not self.parameters_locked
+            and not self.motor_pending
+            and not self.worker.stopping.is_set()
+        )
+
+    def set_parameters_locked(self, locked):
+        self.parameters_locked = locked
+        self.parameter_lock_button.setChecked(locked)
+        self.parameter_lock_button.setText(
+            "Parameter entsperren" if locked else "Parameter sperren"
+        )
+        self.live_timer.stop()
+        self.update_controls()
+
+    def on_editor_changed(self):
+        if self.syncing_parameters:
+            return
+        self.live_timer.stop()
+        try:
+            parameters = self.editor.parameters()
+            self.remember_edit()
+        except ValueError as exc:
+            self.parameter_error = str(exc)
+            self.pending_parameters = None
+        else:
+            self.parameter_error = ""
+            # During a write, comparison must use its target, not the old readback.
+            target = self.sent_parameters or self.confirmed_parameters
+            self.pending_parameters = parameters if parameters != target else None
+        self.update_controls()
+
+    def update_live_parameters(self):
+        if self.parameter_error:
+            text = "Eingabe ungültig: " + self.parameter_error
+        elif self.state in {"disconnected", "connecting", "disconnecting"}:
+            text = "offline · Änderungen bleiben lokal"
+        elif self.sent_parameters is not None:
+            text = "Parameter schreiben und zurücklesen …"
+            if self.parameters_locked:
+                text += " · Parametersperre aktiv"
+        elif self.parameters_locked:
+            text = "Parameter gesperrt"
+            if self.pending_parameters is not None:
+                text += " · Änderungen warten auf Entsperren"
+        elif self.pending_parameters is not None:
+            if self.can_write_parameters():
+                if not self.live_timer.isActive():
+                    self.live_timer.start()
+                text = "Änderungen werden automatisch übertragen …"
+            else:
+                text = "Änderungen warten auf Abschluss der laufenden Operation"
+        else:
+            text = "Werte bestätigt"
+        self.live_status.setText("SPS-Live: " + text)
+
+    def flush_live_parameters(self):
+        if self.pending_parameters is not None and self.can_write_parameters():
+            self.apply_parameters()
+
+    def release_session(self):
+        self.live_timer.stop()
+        self.pending_parameters = None
+        self.state = "disconnecting"
+        self.update_controls()
+        self.worker.submit("release")
 
     def invalidate_autotune_results(self):
         self.autotune_results.set_results(())
@@ -455,6 +567,7 @@ class MainWindow(QMainWindow):
         candidate = self.autotune_results.selected_candidate()
         available = (
             editable
+            and not self.parameters_locked
             and settings.model_result is not None
             and candidate is not None
             and any(c is candidate for c in settings.model_result.candidates)
@@ -475,6 +588,8 @@ class MainWindow(QMainWindow):
 
     def import_autotune_result(self):
         try:
+            if self.parameters_locked:
+                raise ValueError("Parameter zuerst entsperren.")
             if self.state not in {"disconnected", "ready"}:
                 raise ValueError("Versuch oder laufende SPS-Operation zuerst abschließen.")
             candidate = self.autotune_results.selected_candidate()
@@ -497,8 +612,9 @@ class MainWindow(QMainWindow):
             self.refresh_variants(len(self.variants) - 1)
         self.pages.setCurrentWidget(self.main_page)
         self.autotune_status.setText(
-            f"Array {candidate.mount.array_index} / Düse {candidate.mount.nozzle_index} "
-            "in lokale Ausgangswerte übernommen. SPS unverändert. " + candidate.message
+            f"Array {candidate.mount.array_index} / {candidate.nozzle_label} "
+            "in Ausgangswerte übernommen. Bei SPS-Verbindung erfolgt die Live-Übertragung. "
+            + candidate.message
         )
         self.update_controls()
 
@@ -526,6 +642,18 @@ class MainWindow(QMainWindow):
             self.prepare_button,
         ):
             control.setEnabled(editable)
+        self.editor.setEnabled(
+            (editable or self.state == "updating") and not self.parameters_locked
+        )
+        for control in (
+            self.profile_button,
+            self.load_button,
+            self.add_button,
+            self.remove_button,
+            self.variant_list,
+        ):
+            control.setEnabled(editable and not self.parameters_locked)
+        self.parameter_lock_button.setEnabled(editable or self.state == "updating")
         self.autotune_settings.setEnabled(editable)
         self.update_autotune_controls()
         self.save_recipe_button.setEnabled(
@@ -533,20 +661,41 @@ class MainWindow(QMainWindow):
         )
         motor = self.pressure_state.get("conveyor") or {}
         stationary = not motor.get("moving", True)
-        self.apply_parameters_button.setEnabled(ready and stationary and not self.motor_pending)
+        parameters_pending = (
+            self.pending_parameters is not None
+            or self.sent_parameters is not None
+            or bool(self.parameter_error)
+        )
+        # A modal file dialog must not race a live write started by its nested event loop.
+        if ready and parameters_pending:
+            for control in (
+                self.roadmap_button,
+                self.profile_button,
+                self.load_button,
+                self.save_recipe_button,
+            ):
+                control.setEnabled(False)
+        self.apply_parameters_button.setEnabled(self.can_write_parameters())
         self.start_button.setEnabled(
             ready
             and self.camera_connected
             and self.context is not None
             and stationary
             and not self.motor_pending
+            and not parameters_pending
+            and not self.parameters_locked
         )
         self.trigger_button.setEnabled(
             self.state == "waiting" and self.camera_armed and self.manual_capture
         )
         self.abort_button.setEnabled(self.state not in {"disconnected", "ready"})
         self.result_button.setEnabled(
-            ready and bool(self.results) and stationary and not self.motor_pending
+            ready
+            and bool(self.results)
+            and stationary
+            and not self.motor_pending
+            and not parameters_pending
+            and not self.parameters_locked
         )
         self.conveyor_start_button.setEnabled(
             (ready or self.state == "recording" or (self.state == "waiting" and self.camera_armed))
@@ -554,24 +703,43 @@ class MainWindow(QMainWindow):
             and stationary
             and not motor.get("fault_code")
             and not motor.get("error")
+            and not parameters_pending
         )
         self.conveyor_stop_button.setEnabled(
             self.state not in {"disconnected", "connecting"}
             and bool(self.pressure_state.get("connected"))
         )
+        self.update_live_parameters()
 
     def handle_event(self, name, value):
         if name == "state":
             self.state = value
+            if value == "disconnected":
+                self.live_timer.stop()
+                self.pending_parameters = None
+                self.sent_parameters = None
+                self.confirmed_parameters = None
             self.state_label.setText(STATES.get(value, value))
             self.update_controls()
         elif name == "connected":
+            self.confirmed_parameters = copy.deepcopy(value["parameters"])
             if not self.variants:
-                self.variants = [{"name": "Ausgangswerte", "parameters": value["parameters"]}]
-                self.editing = -1
-                self.refresh_variants()
+                selected = self.pending_parameters or value["parameters"]
+                self.syncing_parameters = True
+                try:
+                    self.variants = [{"name": "Ausgangswerte", "parameters": selected}]
+                    self.editing = -1
+                    self.refresh_variants()
+                finally:
+                    self.syncing_parameters = False
+            self.on_editor_changed()
         elif name == "pressure_state":
             self.pressure_state = value
+            if self.sent_parameters is None and value.get("parameters") is not None:
+                self.confirmed_parameters = copy.deepcopy(value["parameters"])
+                if self.pending_parameters == self.confirmed_parameters:
+                    self.pending_parameters = None
+                    self.live_timer.stop()
             motor = value.get("conveyor") or {}
             self.conveyor_label.setText(
                 f"Band: {'läuft' if motor.get('moving') else 'steht'} · "
@@ -595,8 +763,17 @@ class MainWindow(QMainWindow):
             )
             self.update_controls()
         elif name == "parameters_applied":
-            self.editor.set_parameters(value)
-            self.remember_edit()
+            self.confirmed_parameters = copy.deepcopy(value)
+            if self.pending_parameters is None and not self.parameter_error:
+                self.syncing_parameters = True
+                try:
+                    self.editor.set_parameters(value)
+                    self.remember_edit()
+                finally:
+                    self.syncing_parameters = False
+            elif self.pending_parameters == value:
+                self.pending_parameters = None
+            self.sent_parameters = None
             self.statusBar().showMessage("Array-Parameter und Bandgeschwindigkeit bestätigt.")
         elif name == "measurements":
             self.samples.extend(value)
@@ -624,6 +801,9 @@ class MainWindow(QMainWindow):
             self.profile_directory = Path(value["profile_path"]).parent
             self.statusBar().showMessage("Profil gespeichert: " + value["profile_path"])
         elif name == "error":
+            self.live_timer.stop()
+            self.pending_parameters = None
+            self.sent_parameters = None
             self.state_label.setText("Fehler: " + value)
             QMessageBox.warning(self, "AutoTune", value)
 
@@ -716,6 +896,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Roadmap", str(exc))
 
     def load_profile(self):
+        if self.parameters_locked:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Profil laden", str(self.profile_directory), "JSON (*.json)"
         )
@@ -738,9 +920,14 @@ class MainWindow(QMainWindow):
         self.worker.submit("conveyor", start)
 
     def apply_parameters(self):
+        if not self.can_write_parameters():
+            return
         try:
             self.remember_edit()
             parameters = self.editor.parameters()
+            self.live_timer.stop()
+            self.pending_parameters = None
+            self.sent_parameters = parameters
             self.state = "updating"
             self.update_controls()
             self.worker.submit("apply_parameters", parameters)
@@ -761,16 +948,20 @@ class MainWindow(QMainWindow):
         self.select_variant(selected)
 
     def select_variant(self, index):
+        if self.parameters_locked and not self.syncing_parameters:
+            return
         if index < 0 or index >= len(self.variants):
             return
         try:
             self.remember_edit()
-            self.editor.set_parameters(self.variants[index]["parameters"])
             self.editing = index
+            self.editor.set_parameters(self.variants[index]["parameters"])
         except ValueError as exc:
             QMessageBox.warning(self, "Parameter", str(exc))
 
     def add_variant(self):
+        if self.parameters_locked:
+            return
         try:
             self.remember_edit()
             self.variants.append(
@@ -781,14 +972,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Parameter", str(exc))
 
     def remove_variant(self):
+        if self.parameters_locked:
+            return
         if len(self.variants) > 1 and self.editing >= 0:
             self.variants.pop(self.editing)
             self.refresh_variants()
 
     def start_trial(self):
+        if self.parameters_locked:
+            return
         try:
             self.remember_edit()
             parameters = self.editor.parameters()
+            self.live_timer.stop()
+            self.pending_parameters = None
             self.samples = []
             self.plot.set_samples([])
             self.state = "applying"
@@ -815,6 +1012,8 @@ class MainWindow(QMainWindow):
             self.result_details.setText("\n".join(details))
 
     def save_result(self):
+        if self.parameters_locked:
+            return
         row = self.result_table.currentRow()
         if 0 <= row < len(self.results):
             default_name = (
@@ -861,6 +1060,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Testreihe", str(exc))
 
     def load_recipe(self):
+        if self.parameters_locked:
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Testreihe laden", "", "JSON (*.json)")
         if path:
             try:
@@ -882,6 +1083,7 @@ class MainWindow(QMainWindow):
             self.close()
 
     def closeEvent(self, event):
+        self.live_timer.stop()
         self.autotune_settings.stop()
         if self.worker.isRunning() or self.autotune_settings.workers_running():
             self.worker.stopping.set()

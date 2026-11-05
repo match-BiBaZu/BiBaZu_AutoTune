@@ -33,6 +33,7 @@ class ModelPanel(QTabWidget):
         super().__init__(parent)
         self.fields = {}
         self.mount_rows = []
+        self.longitudinal_fields = {}
         self.defaults_store = ModelDefaultsStore(defaults_path)
         warning = ""
         try:
@@ -64,6 +65,7 @@ class ModelPanel(QTabWidget):
             ("distance_m", "Düse–Bauteil-Abstand [mm]", 1000, 0.001, 10000),
             ("spread_angle_deg", "Strahlöffnungswinkel [°]", 1, 0, 179),
             ("margin_m", "Zusätzlicher Randabstand [mm]", 1000, 0, 1000),
+            ("offset_safety_m", "Zusätzliche Offsetreserve entlang X [mm]", 1000, 0, 1000),
             ("half_hit_lower", "Gewicht 0,5 ab Überdeckung [%]", 100, 0.001, 50),
             ("half_hit_upper", "Gewicht 1 ab Überdeckung [%]", 100, 50, 99.999),
             ("drag_coefficient", "Widerstandsbeiwert c_d", 1, 0.001, 100),
@@ -83,11 +85,23 @@ class ModelPanel(QTabWidget):
             control.setValue(getattr(config, name) * scale)
             self.fields[name] = (control, scale)
             form.addRow(label, control)
+        self.fields["offset_safety_m"][0].setToolTip(
+            "Zusätzliche Sicherheit in beide Förderrichtungen, über Strahlradius und "
+            "Randabstand hinaus. Standard 5 mm. Der Kraftangriff liegt weiter innerhalb "
+            "der Bauteilfläche; seitliche Reihenabstände bleiben unverändert. "
+            "0 mm stellt die bisherige Offsetauswahl wieder her."
+        )
         self.outer_width = QDoubleSpinBox()
         self.outer_width.setDecimals(6)
         self.outer_width.setRange(0.001, 100000)
         self.outer_width.setValue(config.outer_width_m * 1000)
-        form.insertRow(3, "Außenbreite Lochreihe [mm] (vorläufig 24)", self.outer_width)
+        form.insertRow(3, "Außenbreite der Öffnungen [mm]", self.outer_width)
+        self.center_span = QLabel(f"{config.center_span_m * 1000:g}")
+        self.center_span.setToolTip(
+            "Abstand zwischen erster und letzter Lochmitte: (Öffnungszahl − 1) × Teilung. "
+            "Bei acht Öffnungen und 2,8 mm Teilung ergibt das 19,6 mm."
+        )
+        form.insertRow(4, "Abstand erste–letzte Lochmitte [mm]", self.center_span)
         self.manual_axis = QComboBox()
         self.manual_axis.addItems(["Automatisch aus Posen/Roadmap", "X", "Y", "Z"])
         self.manual_angle = QDoubleSpinBox()
@@ -114,7 +128,7 @@ class ModelPanel(QTabWidget):
         parameters_layout.addWidget(self.save_parameters_button)
         parameters_layout.addWidget(self.parameters_status)
         self.addTab(parameters_page, "Modellparameter")
-        self.mount_table = QTableWidget(8, 5)
+        self.mount_table = QTableWidget(len(config.mounts), 6)
         self.mount_table.setHorizontalHeaderLabels(
             [
                 "Array",
@@ -122,6 +136,7 @@ class ModelPanel(QTabWidget):
                 "Kipp-/Reihenachse",
                 "Strahl normal",
                 "Reihenmitte ab Rinnenkante [mm]",
+                "X-Versatz zur Referenzdüse [mm]",
             ]
         )
         for row, mount in enumerate(config.mounts):
@@ -143,6 +158,24 @@ class ModelPanel(QTabWidget):
             for col, control in enumerate((axis, normal, center), 2):
                 self.mount_table.setCellWidget(row, col, control)
             self.mount_rows.append((mount, axis, normal, center))
+            longitudinal = QLineEdit(
+                f"{mount.longitudinal_offset_m * 1000:g}"
+                if mount.longitudinal_offset_m is not None
+                else ""
+            )
+            longitudinal.setPlaceholderText("Nicht angegeben")
+            longitudinal.setToolTip(
+                "Vorzeichenbehafteter X-Versatz der Reihenmitte zur Referenzdüse 1/4. "
+                "Nur für Reihen entlang X; Referenzdüse bleibt bei 0 mm."
+            )
+            self.longitudinal_fields[(mount.array_index, mount.nozzle_index)] = longitudinal
+            self.mount_table.setCellWidget(row, 5, longitudinal)
+            longitudinal.setReadOnly(mount.nozzle_index in (1, 4))
+            longitudinal.setEnabled(mount.rotation_axis == "x")
+            axis.currentTextChanged.connect(
+                lambda text, field=longitudinal: field.setEnabled(text == "X")
+            )
+            longitudinal.textChanged.connect(self.changed)
             axis.currentTextChanged.connect(self.changed)
             normal.currentTextChanged.connect(self.changed)
             center.valueChanged.connect(self.changed)
@@ -151,6 +184,15 @@ class ModelPanel(QTabWidget):
         )
         montage = QWidget()
         montage_layout = QVBoxLayout(montage)
+        instructions = QLabel(
+            "Düsen 1–3 und 4–6 verlängern jeweils dieselbe Lochreihe. "
+            "Alle drei Montagepositionen müssen bekannt sein. Zugeschaltet wird eine Düse "
+            "erst ab einem Volltreffer einschließlich Randabstand. "
+            "Für Reihen entlang X den Versatz der Reihenmitte zu Düse 1/4 eingeben; "
+            "ansonsten bezeichnet die Reihenmitte den Abstand entlang Y/Z von der Rinnenkante."
+        )
+        instructions.setWordWrap(True)
+        montage_layout.addWidget(instructions)
         montage_layout.addWidget(self.mount_table)
         self.save_mounts_button = QPushButton("Aktuelle Montagewerte als Standard speichern")
         self.save_mounts_button.clicked.connect(self.save_mounts_defaults)
@@ -177,6 +219,7 @@ class ModelPanel(QTabWidget):
         diameter = self.fields["diameter_m"][0].value()
         pitch = self.fields["pitch_m"][0].value()
         self.outer_width.setValue(diameter + (self.count.value() - 1) * pitch)
+        self.center_span.setText(f"{(self.count.value() - 1) * pitch:g}")
         self.outer_width.setReadOnly(self.count.value() == 1)
         self._linking = False
 
@@ -187,6 +230,9 @@ class ModelPanel(QTabWidget):
         diameter = self.fields["diameter_m"][0].value()
         self.fields["pitch_m"][0].setValue(
             (self.outer_width.value() - diameter) / (self.count.value() - 1)
+        )
+        self.center_span.setText(
+            f"{(self.count.value() - 1) * self.fields['pitch_m'][0].value():g}"
         )
         self._linking = False
         self.changed.emit()
@@ -204,9 +250,23 @@ class ModelPanel(QTabWidget):
                 rotation_axis=axis.currentText().lower(),
                 normal_axis=normal.currentText()[-1].lower(),
                 row_center_m=center.value() / 1000 if center.value() >= 0 else None,
+                longitudinal_offset_m=self.longitudinal_value(mount, axis.currentText()),
             )
             for mount, axis, normal, center in self.mount_rows
         )
+
+    def longitudinal_value(self, mount, axis):
+        if axis != "X" or mount.nozzle_index in (1, 4):
+            return 0.0
+        text = self.longitudinal_fields[(mount.array_index, mount.nozzle_index)].text().strip()
+        if not text:
+            return None
+        try:
+            return float(text.replace(",", ".")) / 1000
+        except ValueError as exc:
+            raise ValueError(
+                "X-Versatz muss eine Zahl in mm sein; Dezimalpunkt oder Komma verwenden."
+            ) from exc
 
     def configuration(self) -> ModelConfiguration:
         config = replace(

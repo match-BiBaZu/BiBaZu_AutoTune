@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import trimesh
+from PyQt6.QtCore import QPointF
 from PyQt6.QtGui import QFont, QFontDatabase
 from PyQt6.QtWidgets import QApplication, QFileDialog
 from test_analytical_model import pose
@@ -22,14 +23,74 @@ def prepare(window, wait, tmp_path, axis="y", angle=90):
     dialog.target.setText(", ".join(str(v) for v in pose(axis, angle)["target_quaternion_xyzw"]))
     dialog.confirm_manual()
     panel = dialog.model_panel
+    # These are regression cases for the earlier nozzle geometry.
+    panel.fields["diameter_m"][0].setValue(0.7)
+    panel.fields["pitch_m"][0].setValue((24 - 0.7) / 7)
     panel.fields["spread_angle_deg"][0].setValue(0)
+    panel.fields["offset_safety_m"][0].setValue(0)
     panel.fields["uphill_deg"][0].setValue(0)
     panel.fields["cross_slope_deg"][0].setValue(0)
     for mount, _, _, center in panel.mount_rows:
-        center.setValue(15 if mount.normal_axis == "z" else 20)
+        center.setValue(
+            (15 if mount.normal_axis == "z" else 20)
+            + (200 * (mount.nozzle_index - 1) if mount.nozzle_index <= 3 else 0)
+        )
+        if mount.nozzle_index >= 5:
+            panel.longitudinal_fields[(mount.array_index, mount.nozzle_index)].setText(
+                str(200 * (mount.nozzle_index - 4))
+            )
     for row in window.editor.rows:
         row["pulse_duration_ms"].setValue(500)
     return dialog, panel
+
+
+@pytest.mark.parametrize(
+    "axis,angle,attack_left",
+    [("y", 90, False), ("y", -90, True), ("z", 90, True), ("z", -90, False)],
+)
+def test_belt_view_and_force_side_for_both_turns(
+    offline_window, tmp_path, axis, angle, attack_left
+):
+    window, services, errors, wait = offline_window
+    settings, panel = prepare(window, wait, tmp_path, axis, angle)
+    panel.fields["cross_slope_deg"][0].setValue(45)
+    before = copy.deepcopy(window.editor.parameters())
+    window.calculate_button.click()
+    wait(lambda: settings.model_result is not None)
+    candidate = window.autotune_results.selected_candidate()
+    assert candidate.pressure is not None, candidate.message
+    impact = candidate.impact
+    preview = window.autotune_results.preview
+    points = [p for ring in impact.silhouette_rings for p in ring]
+    transform = preview._projection_transform(points, impact.jet_radius_m)
+
+    # +X is the leading edge and moves to the left in the operator's view.
+    front = transform.map(QPointF(0.01, 0))
+    back = transform.map(QPointF(-0.01, 0))
+    assert front.x() < back.x()
+    assert transform.map(QPointF(0, 0.01)).y() < transform.map(QPointF(0, 0)).y()
+
+    # Independent moment signs: +Z needs force at +X, +Y needs force at -X.
+    expected_x_sign = (1 if axis == "z" else -1) * (1 if angle > 0 else -1)
+    assert candidate.mechanics.pivot_m[0] == pytest.approx(-expected_x_sign * 0.01)
+    visible = preview.visible_opening_indices()
+    assert all(impact.points_m[i][0] * expected_x_sign > 0 for i in visible)
+    center_screen = transform.map(QPointF(0, 0)).x()
+    for i in visible:
+        screen_x = transform.map(QPointF(impact.points_m[i][0], 0)).x()
+        assert (screen_x < center_screen) == attack_left
+    assert "Förderbandrichtung: +X" in window.autotune_results.details.toPlainText()
+    assert window.editor.parameters() == before
+    assert not services.calls and not errors
+    if os.environ.get("BIBAZU_GUI_ARTIFACTS"):
+        font_id = QFontDatabase.addApplicationFont("C:/Windows/Fonts/segoeui.ttf")
+        families = QFontDatabase.applicationFontFamilies(font_id)
+        if families:
+            QApplication.instance().setFont(QFont(families[0], 9))
+        destination = Path(os.environ["BIBAZU_GUI_ARTIFACTS"])
+        destination.mkdir(parents=True, exist_ok=True)
+        preview.resize(1100, 360)
+        assert preview.grab().save(str(destination / f"belt-{axis}-{angle}.png"))
 
 
 def test_calculation_configuration_and_no_writes(offline_window, tmp_path, monkeypatch):
@@ -47,6 +108,9 @@ def test_calculation_configuration_and_no_writes(offline_window, tmp_path, monke
     assert all(c.status == "ready" for c in result.candidates)
     assert window.autotune_results.table.rowCount() == 2
     assert window.autotune_results.table.item(0, 5).text() != "—"
+    assert float(window.autotune_results.table.item(0, 7).text()) == pytest.approx(
+        result.candidates[0].pressure.force_n, rel=1e-5
+    )
     assert "Kippkante" in window.autotune_results.details.toPlainText()
     assert "Schwerpunkt" in window.autotune_results.details.toPlainText()
     assert "np.float" not in window.autotune_results.details.toPlainText()
@@ -92,7 +156,8 @@ def test_linked_width_and_pitch_and_missing_mount(offline_window, tmp_path):
         center.setValue(-0.0001)
     window.calculate_autotune()
     assert all(c.status == "blocked" for c in window.autotune_results.results)
-    assert "Montageposition" in window.autotune_results.table.item(0, 7).text()
+    assert "Montageposition" in window.autotune_results.table.item(0, 8).text()
+    assert window.autotune_results.table.item(0, 7).text() == "—"
     assert dialog.model_result is None
 
 
@@ -109,16 +174,21 @@ def test_seven_hits_are_counted_and_explained_in_gui(offline_window, tmp_path):
     dialog.target.setText(", ".join(str(v) for v in pose("y", -90)["target_quaternion_xyzw"]))
     dialog.confirm_manual()
     panel = dialog.model_panel
+    panel.fields["diameter_m"][0].setValue(0.7)
+    panel.fields["pitch_m"][0].setValue((24 - 0.7) / 7)
     panel.fields["distance_m"][0].setValue(17.4)
     panel.fields["contact_tolerance_m"][0].setValue(0.05)
     for mount, _, _, center in panel.mount_rows:
-        if mount.array_index in (2, 4) and mount.nozzle_index == 1:
-            center.setValue(12)
+        if mount.array_index in (2, 4) and mount.nozzle_index <= 3:
+            center.setValue(12 + 200 * (mount.nozzle_index - 1))
     before = window.editor.parameters()
     window.calculate_autotune()
     wait(lambda: dialog.model_result is not None)
     assert window.autotune_results.table.item(0, 3).text() == "6"
-    assert window.autotune_results.results[0].impact.weights == (0.5,) + (1.0,) * 5 + (0.5, 0.0)
+    assert (
+        window.autotune_results.results[0].impact.weights
+        == (0.5,) + (1.0,) * 5 + (0.5, 0.0) + (0.0,) * 16
+    )
     assert "0 / 0,5 / 1" in window.autotune_results.details.toPlainText()
     assert "Flächenüberdeckung:" in window.autotune_results.details.toPlainText()
     assert "Öffnungen mit positivem Gewicht: 7" in window.autotune_results.details.toPlainText()
@@ -154,12 +224,12 @@ def test_half_hit_sum_is_not_truncated_and_threshold_edits_invalidate(offline_wi
     window, services, errors, wait = offline_window
     dialog, panel = prepare(window, wait, tmp_path)
     for mount, _, _, center in panel.mount_rows:
-        if mount.normal_axis == "z":
+        if mount.normal_axis == "z" and mount.nozzle_index == 1:
             center.setValue(11.65)
     window.calculate_button.click()
     wait(lambda: dialog.model_result is not None)
     impact = dialog.model_result.candidates[0].impact
-    assert impact.weights == (0.5,) + (1.0,) * 7
+    assert impact.weights == (0.5,) + (1.0,) * 7 + (0.0,) * 16
     assert window.autotune_results.table.item(0, 3).text() == "7.5"
     assert "Flächenüberdeckung: 50.00%" in window.autotune_results.details.toPlainText()
     assert impact.area_eff_m2 == pytest.approx(7.5 * math.pi * impact.jet_radius_m**2)
@@ -198,11 +268,21 @@ def test_model_worker_discards_stale_result_and_leaves_network_available(
         panel.fields["drag_coefficient"][0].setValue(1.2)
         assert window.calculate_button.isEnabled()
         window.worker.submit("connect")
-        wait(lambda: window.state == "ready")
+        expected = window.editor.parameters()
+        wait(
+            lambda: (
+                window.state == "ready"
+                and window.pending_parameters is None
+                and window.confirmed_parameters == expected
+            )
+        )
         assert dialog.model_result is None
         window.calculate_autotune()
         assert not window.calculate_button.isEnabled()
-        assert not any(method == "PUT" for method, _, _ in services.calls)
+        # Offline editor changes are live-synchronized; starting the calculation
+        # must not submit another parameter set while its worker is blocked.
+        writes = [body for method, _, body in services.calls if method == "PUT"]
+        assert len(writes) == 1
     finally:
         release.set()
     wait(lambda: dialog.model_result is not None)

@@ -49,11 +49,11 @@ class ModelDefaultsStore:
         try:
             raw = json.loads(self.path.read_text("utf-8"))
         except FileNotFoundError:
-            return {"schema_version": 1}
+            return {"schema_version": 2}
         if (
             not isinstance(raw, dict)
             or type(raw.get("schema_version")) is not int
-            or raw["schema_version"] != 1
+            or raw["schema_version"] not in (1, 2)
             or set(raw) - {"schema_version", "model_parameters", "mounts"}
         ):
             raise ValueError("Unbekanntes Format der Autotune-Standardwerte.")
@@ -67,20 +67,33 @@ class ModelDefaultsStore:
         }:
             raise ValueError("Ungültige gespeicherte Modellparameter.")
         density = validate_density(parameters.get("density_kg_m3", DEFAULT_DENSITY_KG_M3))
-        mounts = default_mounts()
+        mounts = {(m.array_index, m.nozzle_index): m for m in default_mounts()}
         if "mounts" in raw:
             values = raw["mounts"]
             mount_fields = {f.name for f in fields(NozzleMount)}
+            legacy = raw["schema_version"] == 1
+            if legacy:
+                mount_fields.remove("longitudinal_offset_m")
+            expected_keys = {key for key in mounts if not legacy or key[1] in (1, 4)}
             if (
                 not isinstance(values, list)
-                or len(values) != len(mounts)
+                or len(values) != len(expected_keys)
                 or any(not isinstance(v, dict) or set(v) != mount_fields for v in values)
             ):
                 raise ValueError("Ungültige gespeicherte Montagewerte.")
-            mounts = tuple(NozzleMount(**v) for v in values)
+            if any(
+                type(v["array_index"]) is not int or type(v["nozzle_index"]) is not int
+                for v in values
+            ):
+                raise ValueError("Ungültige gespeicherte Array-/Düsenindizes.")
+            decoded = tuple(NozzleMount(**v) for v in values)
+            if {(m.array_index, m.nozzle_index) for m in decoded} != expected_keys:
+                raise ValueError("Ungültige gespeicherte Montagewerte.")
+            mounts.update({(m.array_index, m.nozzle_index): m for m in decoded})
         try:
             config = ModelConfiguration(
-                **{k: v for k, v in parameters.items() if k in PARAMETER_FIELDS}, mounts=mounts
+                **{k: v for k, v in parameters.items() if k in PARAMETER_FIELDS},
+                mounts=tuple(mounts.values()),
             )
             config.validate()
         except (TypeError, OverflowError) as exc:
@@ -90,14 +103,21 @@ class ModelDefaultsStore:
     def load(self) -> ModelDefaults:
         return self._decode(self._read())
 
+    def _current_format(self):
+        raw = self._read()
+        decoded = self._decode(raw)
+        raw["schema_version"] = 2
+        if "mounts" in raw:
+            raw["mounts"] = [asdict(m) for m in decoded.configuration.mounts]
+        return raw
+
     def save_parameters(self, configuration: ModelConfiguration, density: float):
         config = replace(
             configuration, mounts=default_mounts(), manual_axis=None, manual_angle_deg=90
         )
         config.validate()
         density = validate_density(density)
-        raw = self._read()
-        self._decode(raw)
+        raw = self._current_format()
         raw["model_parameters"] = {
             key: value for key, value in asdict(config).items() if key in PARAMETER_FIELDS
         }
@@ -107,9 +127,8 @@ class ModelDefaultsStore:
     def save_mounts(self, mounts: tuple[NozzleMount, ...]):
         ModelConfiguration(mounts=mounts).validate()
         if len(mounts) != len(default_mounts()):
-            raise ValueError("Montagewerte für alle acht Array-/Düsenkombinationen erforderlich.")
-        raw = self._read()
-        self._decode(raw)
+            raise ValueError("Montagewerte für alle 24 Array-/Düsenkombinationen erforderlich.")
+        raw = self._current_format()
         raw["mounts"] = [asdict(m) for m in mounts]
         self._write(raw)
 

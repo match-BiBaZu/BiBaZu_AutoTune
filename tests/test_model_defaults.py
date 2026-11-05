@@ -41,7 +41,7 @@ def test_parameters_and_mounts_are_saved_independently(tmp_path):
         drag_coefficient=0.8, contact_tolerance_m=0.00005, manual_axis="y", manual_angle_deg=-180
     )
     store.save_parameters(config, 1250)
-    assert all(m.row_center_m is None for m in store.load().configuration.mounts)
+    assert store.load().configuration.mounts == ModelConfiguration().mounts
     mounts = tuple(
         replace(m, row_center_m=0.0123 if m.nozzle_index == 1 else None) for m in config.mounts
     )
@@ -73,7 +73,7 @@ def test_invalid_density_never_overwrites_saved_defaults(tmp_path, density):
     "contents",
     [
         "{",
-        '{"schema_version":2}',
+        '{"schema_version":3}',
         '{"schema_version":1,"model_parameters":{"distance_m":"bad"}}',
         '{"schema_version":1,"model_parameters":{"density_kg_m3":-1}}',
         '{"schema_version":1,"mounts":[]}',

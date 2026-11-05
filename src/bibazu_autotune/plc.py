@@ -165,7 +165,9 @@ class AdsBackend:
 
     def apply(self, parameters, guard):
         parameters = validate_parameters(parameters)
-        self.ensure_stationary()
+        modes = self.read(FLAGS[1:4])
+        if any(modes.values()):
+            raise RuntimeError("Kalibrierung und Messmodi vor Parameteränderungen beenden.")
         values = {"MAIN.GuiConveyorSpeedMmPerSec": parameters["conveyor_speed_mm_per_sec"]}
         for array in parameters["arrays"]:
             symbols = array_symbols(array["index"])
