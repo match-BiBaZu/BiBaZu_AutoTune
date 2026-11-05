@@ -88,6 +88,15 @@ class PressureClient(Client):
     def stop_conveyor(self):
         return self.request("POST", "conveyor/stop")
 
+    def check_pressure_test(self):
+        return self.request("POST", "pressure-test/check")
+
+    def start_pressure_test(self, request_id):
+        return self.request("POST", "pressure-test/start", json={"request_id": request_id})
+
+    def abort_pressure_test(self, request_id):
+        return self.request("POST", "pressure-test/abort", json={"request_id": request_id})
+
 
 class VisionClient(Client):
     service_name = "Kamera-API"

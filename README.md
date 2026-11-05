@@ -82,6 +82,54 @@ Berechnungen und die Ergebnisansicht bleiben verfügbar; zur Übernahme eines Ka
 zuerst entsperren. Für Kamera-Testreihen eine Transition auswählen oder manuelle Posen
 bestätigen und den folgenden Ablauf verwenden.
 
+## Separater Drucktest
+
+`Start-Drucktest.cmd` oder `./Start-Drucktest.ps1` öffnet ein eigenständiges Testfenster.
+AutoTune und Pressure Control vorher schließen, da der Test denselben exklusiven
+SPS-Zugriff verwendet. Öffnen und **SPS verbinden** starten keinen Luftstoß.
+**Testreihe starten** führt ausschließlich an **Array 2, Düse 1 / OpenValve5** aus:
+20, 50 und 100 ms, jeweils 1000–6000 mbar in 1000-mbar-Schritten und fünf Wiederholungen.
+Das sind 90 Stöße, nach Impulsdauer, Druck und Wiederholung sortiert.
+Zwischen Ventilschluss und dem nächsten Stoß liegen mindestens drei Sekunden;
+der neue Sollwert erhält mindestens eine Sekunde Einschwingzeit innerhalb dieser Pause.
+Band und andere Düsen bleiben aus. Lichtschranke 4 muss frei sein.
+
+**Abbrechen** verwendet eine separate HTTP-Verbindung und einen priorisierten SPS-Auftrag.
+Jede Startanforderung besitzt eine ID; auch ein vor dem Start empfangener Abbruch sperrt
+genau diese Anforderung. Fenster schließen oder Sitzung verlieren bricht die Reihe ab.
+Einzelstöße werden SPS-seitig begrenzt; sie hängen nicht von einem Windows-Schließtimer ab.
+Nach Abschluss werden Parameterwerte zurückgeschrieben, aber Arrays und Band bleiben aus.
+Die frühere Array-Aktivierung wird nicht automatisch wiederhergestellt.
+
+Aufzeichnung und Speicherung erfolgen im SPS-Dienst. Der Aufruf abonniert beide Rohwerte,
+beide skalierten Druckwerte und den Ventilkommandostatus als zyklische ADS-Notifications
+mit 1-ms-Serverzeitstempeln. **100 ms Vorlauf und 200 ms Nachlauf** werden gespeichert.
+Das ist kein neuer SPS-Puffer: Die EL3068- und Sensor-Aktualisierung begrenzen zusätzlich
+die physikalische Messauflösung. Vor dem ersten Stoß werden gemeinsame, lückenlose
+Zeitstempel geprüft. Fehlende Werte werden nicht interpoliert; unvollständige Messungen
+werden gespeichert, aber von Mittelwerten ausgeschlossen und die Reihe wird angehalten.
+
+Unter `data/pressure_tests/<Anforderungs-ID>/` liegen `run.json`, `summary.csv`,
+die gemeinsame Rohdatendatei `samples.csv`,
+`combinations.csv`, pro Stoß `pulse_NNN.csv` und die unveränderten ADS-Ereignisse
+`pulse_NNN_notifications.csv`. Die Tabelle zeigt Spitzenwert und Mittelwert während
+des Öffnungskommandos. Die skalierte Druckkurve ist nach jedem Stoß auswählbar.
+Die SPS-Skalierung `Rohwert * 10 / 32767` bleibt vorläufig; sie ist noch nicht anhand
+des Sensortyps bestätigt. Es wird keine Korrektur im analytischen Modell vorgenommen.
+
+Die SPS benötigt nur die optionale Kurzimpuls-Erweiterung ihrer bestehenden
+Kalibrierfunktion: drei zusätzliche Variablen und eine begrenzte Ergänzung von
+Validierung und automatischem Ventilschluss. Normaler Kalibrierbetrieb, bestehende
+Watchdogs, E/A-Zuordnung und die normale Anlagenlogik bleiben bestehen.
+`tools/install_pressure_test_plc.py <MAIN.TcPOU>` zeigt den Quelltextpatch;
+`--apply` schreibt ihn mit Sicherungskopie. Der Installer lädt nichts auf die SPS.
+Die neue Quelle anschließend in TwinCAT bauen und laden. Das Testfenster verweigert
+den Start ohne `ProbeCalibrationTimedPulseVersion = 1`.
+
+Nur für ausdrücklich angeforderte automatische Ausführung steht
+`./Start-Drucktest.ps1 --auto-run` zur Verfügung; dieser Aufruf verbindet und startet
+die Reihe im sichtbaren Fenster. Der normale Aufruf wartet auf den Startbutton.
+
 ## Autotune-Einstellungen und Berechnung
 
 Das Hauptfenster besitzt die Reiter **Hauptseite** und **Autotune-Einstellungen**.

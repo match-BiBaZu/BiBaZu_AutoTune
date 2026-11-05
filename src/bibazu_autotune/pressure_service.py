@@ -10,19 +10,29 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .api_models import Parameters
+from .api_models import Parameters, PressureTestRequest
 from .api_runtime import ApiError, LocalApiServer, SessionLease, SessionRequest
 from .plc import AdsBackend, PlcConfig
 from .plc_control_lease import PlcControlLease
+from .pressure_test_runner import PressureTestRunner
 
 
 class PressureService:
-    def __init__(self, backend=None, *, lease=None, mutex_factory=PlcControlLease.acquire):
+    def __init__(
+        self,
+        backend=None,
+        *,
+        lease=None,
+        mutex_factory=PlcControlLease.acquire,
+        pressure_test_dir=None,
+        pressure_test_adapter=None,
+    ):
         self.backend = backend or AdsBackend()
         self.lease = lease or SessionLease()
         self.mutex_factory = mutex_factory
@@ -41,6 +51,15 @@ class PressureService:
         self.snapshot = {}
         self.metadata = {}
         self.owned = False
+        self.cancel_pressure_test = threading.Event()
+        self.cancelled_pressure_requests = set()
+        self.pressure_test = PressureTestRunner(
+            self.backend,
+            pressure_test_dir or Path(__file__).resolve().parents[2] / "data/pressure_tests",
+            self.cancel_pressure_test,
+            self.pressure_test_guard,
+            adapter=pressure_test_adapter,
+        )
         self.app = self.create_app()
 
     def start(self):
@@ -62,6 +81,7 @@ class PressureService:
             self.closed.set()
             self.lease.invalidate()
             self.cancel_start.set()
+            self.cancel_pressure_test.set()
             self.enqueue("shutdown", None, priority=-2)
         self.thread.join(5)
         self.watchdog.join(1)
@@ -75,6 +95,9 @@ class PressureService:
             if self.owned and not self.lease.active():
                 self.owned = False
                 self.cancel_start.set()
+                self.cancel_pressure_test.set()
+                if self.pressure_test.active:
+                    self.enqueue("pressure_test_abort", None, priority=-1)
                 self.enqueue("conveyor_stop", None, priority=-1)
 
     def state(self):
@@ -89,6 +112,7 @@ class PressureService:
                     "conveyor": self.snapshot.get("conveyor"),
                     "machine_metadata": self.metadata,
                     "error": self.last_error,
+                    "pressure_test": self.pressure_test.snapshot(),
                 }
             )
 
@@ -122,15 +146,36 @@ class PressureService:
             if self.closed.is_set():
                 raise ApiError(503, "Dienst wird beendet.")
             self.lease.require(token)
+            if kind == "pressure_test_abort":
+                if parameters:
+                    self.cancelled_pressure_requests.add((token, parameters))
+                if not parameters or parameters == getattr(self.pressure_test, "request_id", None):
+                    self.cancel_pressure_test.set()
+            elif self.pressure_test.active:
+                if kind != "conveyor_stop":
+                    raise ApiError(409, "Drucktest läuft; zuerst abbrechen.")
+                self.cancel_pressure_test.set()
             if kind == "conveyor_stop":
                 self.cancel_start.set()
-            elif self.pending:
+            elif kind != "pressure_test_abort" and self.pending:
                 raise ApiError(409, "Eine Operation läuft bereits.")
             elif kind == "conveyor_start":
                 self.cancel_start.clear()
+            elif kind == "pressure_test_start":
+                if (token, parameters) in self.cancelled_pressure_requests:
+                    raise ApiError(409, "Diese Drucktestanforderung wurde bereits abgebrochen.")
+                self.cancel_pressure_test.clear()
             return self.enqueue(
-                kind, token, parameters, priority=-1 if kind == "conveyor_stop" else 0
+                kind,
+                token,
+                parameters,
+                priority=-1 if kind in {"conveyor_stop", "pressure_test_abort"} else 0,
             )
+
+    def pressure_test_guard(self, token):
+        self.guard(token)
+        if self.cancel_pressure_test.is_set():
+            raise RuntimeError("Drucktest abgebrochen; keine weiteren Stöße.")
 
     def guard(self, token, starting=False):
         self.lease.require(token)
@@ -149,20 +194,31 @@ class PressureService:
         try:
             while True:
                 try:
-                    _, _, operation_id, kind, token, parameters = self.commands.get(timeout=0.25)
+                    _, _, operation_id, kind, token, parameters = self.commands.get(
+                        timeout=0.02 if self.pressure_test.active else 0.25
+                    )
                 except queue.Empty:
-                    if self.connected:
+                    if self.pressure_test.active:
+                        self.pressure_test.tick()
+                    elif self.connected:
                         try:
                             self.refresh()
                         except Exception as exc:
                             self.connection_failed(exc)
                     continue
                 if kind == "shutdown":
+                    self.pressure_test.abort("Testfenster wird geschlossen.")
+                    deadline = time.monotonic() + 3.5
+                    while self.pressure_test.active and time.monotonic() < deadline:
+                        self.pressure_test.tick()
+                        time.sleep(0.02)
+                    if self.pressure_test.active:
+                        self.pressure_test.complete("failed", "SPS-Schließen nicht bestätigt.")
                     break
                 result = {"status": "failed"}
                 try:
                     # Internal expiry stops have no token; every user command rechecks its lease.
-                    if token is not None:
+                    if token is not None and kind != "pressure_test_abort":
                         self.guard(token, kind == "conveyor_start")
                     if kind == "read":
                         self.backend.connect()
@@ -174,6 +230,22 @@ class PressureService:
                         snapshot = self.backend.apply(
                             parameters, lambda token=token: self.guard(token)
                         )
+                    elif kind == "pressure_test_check":
+                        result["pressure_test_info"] = self.pressure_test.check()
+                        snapshot = self.snapshot
+                    elif kind == "pressure_test_start":
+                        if (token, parameters) in self.cancelled_pressure_requests:
+                            raise RuntimeError(
+                                "Drucktestanforderung wurde vor dem Start abgebrochen."
+                            )
+                        self.pressure_test.start(token, parameters)
+                        snapshot = self.snapshot
+                    elif kind == "pressure_test_abort":
+                        if not parameters or parameters == getattr(
+                            self.pressure_test, "request_id", None
+                        ):
+                            self.pressure_test.abort()
+                        snapshot = self.snapshot
                     elif kind == "conveyor_start":
                         snapshot = self.backend.start_conveyor(
                             lambda token=token: self.guard(token, True)
@@ -194,6 +266,7 @@ class PressureService:
                 with self.lock:
                     self.operations[operation_id].update(result)
                     self.pending.discard(operation_id)
+                self.pressure_test.tick()
         finally:
             try:
                 if self.connected:
@@ -257,6 +330,7 @@ class PressureService:
                 "nozzles_per_array": 6,
                 "conveyor_start": True,
                 "parameters_schema": Parameters.model_json_schema(),
+                "pressure_test": True,
             }
 
         app.get("/api/v1/state")(self.state)
@@ -295,6 +369,18 @@ class PressureService:
         def stop(x_session_id: str = Header()):
             return self.submit(x_session_id, "conveyor_stop")
 
+        @app.post("/api/v1/pressure-test/check", status_code=202)
+        def pressure_check(x_session_id: str = Header()):
+            return self.submit(x_session_id, "pressure_test_check")
+
+        @app.post("/api/v1/pressure-test/start", status_code=202)
+        def pressure_test_start(body: PressureTestRequest, x_session_id: str = Header()):
+            return self.submit(x_session_id, "pressure_test_start", body.request_id)
+
+        @app.post("/api/v1/pressure-test/abort", status_code=202)
+        def pressure_test_abort(body: PressureTestRequest, x_session_id: str = Header()):
+            return self.submit(x_session_id, "pressure_test_abort", body.request_id)
+
         return app
 
 
@@ -306,7 +392,11 @@ def add_plc_arguments(parser):
 
 
 def configured_service(args):
-    return PressureService(AdsBackend(PlcConfig(args.plc_ip, args.ams_net_id, args.ads_port)))
+    return PressureService(
+        AdsBackend(PlcConfig(args.plc_ip, args.ams_net_id, args.ads_port)),
+        pressure_test_dir=getattr(args, "pressure_test_dir", None),
+        lease=SessionLease(ttl=2) if getattr(args, "pressure_test_mode", False) else None,
+    )
 
 
 def start_bundled(args):

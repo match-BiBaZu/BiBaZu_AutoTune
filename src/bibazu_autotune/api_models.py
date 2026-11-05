@@ -7,6 +7,10 @@ from pydantic import Field, model_validator
 from .api_runtime import StrictModel
 
 
+class PressureTestRequest(StrictModel):
+    request_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+
+
 class ArrayParameters(StrictModel):
     index: Annotated[int, Field(ge=1, le=4)]
     enabled: bool
