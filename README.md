@@ -12,6 +12,10 @@ berechnet analytische Offset-/Druckvorschläge für einzelne Kippbewegungen.
 Ein ausgewählter Vorschlag kann ausdrücklich in den lokalen Parametereditor übernommen werden.
 Der Versuchserfolg wird nicht automatisch bewertet.
 
+## Forschungshintergrund
+
+Das [analytische Modell](src/bibazu_autotune/analytical_model.py) in AutoTune schätzt den Düsendruck für Kippbewegungen. Den Forschungsansatz beschreiben Dasha Shieff et al. in [Just Add Air: Flexible Part Feeding Through Controlled Aerodynamics](https://match-bibazu.github.io/#paper-just-add-air) (WGP-Jahreskongress 2026, publikationsfertiges Manuskript).
+
 ## Installation und Start
 
 Python 3.11+ oder uv installieren, dann in diesem Repository:
