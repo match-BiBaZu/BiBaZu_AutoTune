@@ -108,7 +108,7 @@ def test_calculation_configuration_and_no_writes(offline_window, tmp_path, monke
     assert all(c.status == "ready" for c in result.candidates)
     assert window.autotune_results.table.rowCount() == 2
     assert window.autotune_results.table.item(0, 5).text() != "—"
-    assert float(window.autotune_results.table.item(0, 7).text()) == pytest.approx(
+    assert float(window.autotune_results.table.item(0, 8).text()) == pytest.approx(
         result.candidates[0].pressure.force_n, rel=1e-5
     )
     assert "Kippkante" in window.autotune_results.details.toPlainText()
@@ -156,8 +156,8 @@ def test_linked_width_and_pitch_and_missing_mount(offline_window, tmp_path):
         center.setValue(-0.0001)
     window.calculate_autotune()
     assert all(c.status == "blocked" for c in window.autotune_results.results)
-    assert "Montageposition" in window.autotune_results.table.item(0, 8).text()
-    assert window.autotune_results.table.item(0, 7).text() == "—"
+    assert "Montageposition" in window.autotune_results.table.item(0, 9).text()
+    assert window.autotune_results.table.item(0, 8).text() == "—"
     assert dialog.model_result is None
 
 
@@ -265,7 +265,7 @@ def test_model_worker_discards_stale_result_and_leaves_network_available(
         assert not window.import_button.isEnabled()
         window.open_autotune_settings()
         assert dialog.calculation_running
-        panel.fields["drag_coefficient"][0].setValue(1.2)
+        panel.fields["pressure_scale_a"][0].setValue(1.2)
         assert window.calculate_button.isEnabled()
         window.worker.submit("connect")
         expected = window.editor.parameters()
@@ -287,5 +287,6 @@ def test_model_worker_discards_stale_result_and_leaves_network_available(
         release.set()
     wait(lambda: dialog.model_result is not None)
     assert len(delivered) == 2
+    assert dialog.model_result.candidates[0].sps_pressure.scale_a == 1.2
     assert window.calculate_button.isEnabled()
     assert not errors

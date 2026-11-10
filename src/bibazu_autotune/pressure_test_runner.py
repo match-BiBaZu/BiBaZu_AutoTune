@@ -6,7 +6,15 @@ import copy
 import time
 import uuid
 
-from .pressure_test import FILETIME_MS, SIGNALS, PressureRecording, pressure_matrix
+from .pressure_test import (
+    COMBINATION_SETTLE_MS,
+    FILETIME_MS,
+    INTER_PULSE_PAUSE_MS,
+    PRESSURE_SETTLE_MS,
+    SIGNALS,
+    PressureRecording,
+    pressure_matrix,
+)
 from .pressure_test_plc import PressurePulsePlc
 
 
@@ -29,14 +37,19 @@ class PressureTestRunner:
         self.error = None
         self.last_rows = []
         self.next_publish = 0
-        self.published = {"status": "idle", "phase": "idle", "completed": 0, "total": 90}
+        self.published = {
+            "status": "idle",
+            "phase": "idle",
+            "completed": 0,
+            "total": len(self.matrix),
+        }
 
     def snapshot(self):
         return copy.deepcopy(self.published)
 
     def publish(self, status="running"):
         self.next_publish = self.clock() + 0.2
-        pulse = self.matrix[min(self.index, 89)]
+        pulse = self.matrix[min(self.index, len(self.matrix) - 1)]
         self.published = {
             "status": status,
             "phase": self.phase,
@@ -44,7 +57,7 @@ class PressureTestRunner:
             "completed": len([r for r in self.recording.results if r["complete"]])
             if self.recording
             else 0,
-            "total": 90,
+            "total": len(self.matrix),
             "current": pulse.__dict__,
             "error": self.error,
             "directory": str(self.recording.path) if self.recording else None,
@@ -134,7 +147,16 @@ class PressureTestRunner:
                     ) != (pulse.pressure_mbar, pulse.pulse_ms, 2, 1, True):
                         raise RuntimeError("SPS-Rücklesen der Testparameter stimmt nicht überein.")
                     self.phase = "settling"
-                    self.deadline = max(now + 1, self.last_closed + 3)
+                    previous = self.matrix[self.index - 1] if self.index else None
+                    new_combination = previous is None or (
+                        pulse.pulse_ms,
+                        pulse.pressure_mbar,
+                    ) != (previous.pulse_ms, previous.pressure_mbar)
+                    settle_ms = COMBINATION_SETTLE_MS if new_combination else PRESSURE_SETTLE_MS
+                    self.deadline = max(
+                        now + settle_ms / 1000,
+                        self.last_closed + INTER_PULSE_PAUSE_MS / 1000,
+                    )
                 elif now >= self.deadline:
                     raise RuntimeError("SPS hat den Testmodus nicht bestätigt.")
             elif self.phase == "settling" and now >= self.deadline:
@@ -158,7 +180,7 @@ class PressureTestRunner:
                 if not result["complete"]:
                     raise RuntimeError("Messung unvollständig: " + result["error"])
                 self.index += 1
-                if self.index == 90:
+                if self.index == len(self.matrix):
                     self.abort(None, "completed")
                     return
                 self.sequence = self.plc.leave()

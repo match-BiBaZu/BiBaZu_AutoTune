@@ -611,8 +611,12 @@ class MainWindow(QMainWindow):
             self.variants.append({"name": "Ausgangswerte", "parameters": copy.deepcopy(parameters)})
             self.refresh_variants(len(self.variants) - 1)
         self.pages.setCurrentWidget(self.main_page)
+        updated_array = next(
+            a for a in parameters["arrays"] if a["index"] == candidate.mount.array_index
+        )
         self.autotune_status.setText(
             f"Array {candidate.mount.array_index} / {candidate.nozzle_label} "
+            f"mit skaliertem SPS-Sollwert {updated_array['pressure_mbar']} mbar "
             "in Ausgangswerte übernommen. Bei SPS-Verbindung erfolgt die Live-Übertragung. "
             + candidate.message
         )

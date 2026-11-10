@@ -9,20 +9,29 @@ import argparse
 import difflib
 from pathlib import Path
 
-DECLARATION = """	// Optional timed pulse; normal probe calibration remains unchanged.
+LEGACY_DECLARATION = """	// Optional timed pulse; normal probe calibration remains unchanged.
 	ProbeCalibrationTimedPulseVersion : UINT := 1;
 	GuiProbeCalibrationTimedPulse : BOOL := FALSE;
 	ProbeCalibrationTimedPulse : BOOL := FALSE;
 """
+DECLARATION = LEGACY_DECLARATION.replace("UINT := 1;", "UINT := 2;")
+VERSION_ANCHOR = "ProbeCalibrationInterfaceVersion := 2;"
+VERSION_ASSIGNMENT = VERSION_ANCHOR + "\nProbeCalibrationTimedPulseVersion := 2;"
 OLD_VALIDATION = (
     "\t\t\tOR (GuiProbeCalibrationMaxOpenMs < 1000) OR (GuiProbeCalibrationMaxOpenMs > 300000)"
 )
-NEW_VALIDATION = """			OR (NOT GuiProbeCalibrationTimedPulse AND
+LEGACY_VALIDATION = """			OR (NOT GuiProbeCalibrationTimedPulse AND
 				((GuiProbeCalibrationMaxOpenMs < 1000) OR (GuiProbeCalibrationMaxOpenMs > 300000)))
 			OR (GuiProbeCalibrationTimedPulse AND ((GuiProbeCalibrationMode <> 2)
 				OR (GuiProbeCalibrationArray <> 2) OR (GuiProbeCalibrationNozzle <> 1)
 				OR ((GuiProbeCalibrationMaxOpenMs <> 20) AND (GuiProbeCalibrationMaxOpenMs <> 50)
 				AND (GuiProbeCalibrationMaxOpenMs <> 100))))"""
+NEW_VALIDATION = """			OR (NOT GuiProbeCalibrationTimedPulse AND
+				((GuiProbeCalibrationMaxOpenMs < 1000) OR (GuiProbeCalibrationMaxOpenMs > 300000)))
+			OR (GuiProbeCalibrationTimedPulse AND ((GuiProbeCalibrationMode <> 2)
+				OR (GuiProbeCalibrationArray <> 2) OR (GuiProbeCalibrationNozzle <> 1)
+				OR (GuiProbeCalibrationMaxOpenMs < 20) OR (GuiProbeCalibrationMaxOpenMs > 100)
+				OR ((GuiProbeCalibrationMaxOpenMs MOD 10) <> 0)))"""
 OLD_TIMEOUT = (
     "\t\tIF ProbeCalibrationElapsedMs >= ProbeCalibrationMaxOpenMs "
     "THEN ProbeCalibrationFaultCode := 3; END_IF"
@@ -39,8 +48,19 @@ NEW_TIMEOUT = """		IF ProbeCalibrationElapsedMs >= ProbeCalibrationMaxOpenMs THE
 
 def patched_source(source):
     if "ProbeCalibrationTimedPulseVersion" in source:
-        if all(text in source for text in (DECLARATION, NEW_VALIDATION, NEW_TIMEOUT)):
+        if all(
+            text in source
+            for text in (DECLARATION, NEW_VALIDATION, NEW_TIMEOUT, VERSION_ASSIGNMENT)
+        ):
             return source
+        if all(text in source for text in (LEGACY_DECLARATION, LEGACY_VALIDATION, NEW_TIMEOUT)):
+            if source.count(VERSION_ANCHOR) != 1:
+                raise ValueError("Versionszuweisung der SPS-Kalibrierfunktion nicht eindeutig.")
+            return (
+                source.replace(LEGACY_DECLARATION, DECLARATION)
+                .replace(LEGACY_VALIDATION, NEW_VALIDATION)
+                .replace(VERSION_ANCHOR, VERSION_ASSIGNMENT)
+            )
         raise ValueError("Eine abweichende Kurzimpuls-Erweiterung ist bereits vorhanden.")
     replacements = [
         (
@@ -48,6 +68,7 @@ def patched_source(source):
             "\tProbeCalibrationInterfaceVersion : UINT := 2;\n" + DECLARATION.rstrip(),
         ),
         (OLD_VALIDATION, NEW_VALIDATION),
+        (VERSION_ANCHOR, VERSION_ASSIGNMENT),
         (
             "\t\t\tProbeCalibrationMaxOpenMs := GuiProbeCalibrationMaxOpenMs;",
             "\t\t\tProbeCalibrationMaxOpenMs := GuiProbeCalibrationMaxOpenMs;\n"
@@ -86,7 +107,7 @@ def main():
         )
     )
     if args.apply and result != source:
-        backup = args.main_pou.with_suffix(".TcPOU.before-pressure-test")
+        backup = args.main_pou.with_suffix(".TcPOU.before-pressure-test-v2")
         if backup.exists():
             raise FileExistsError("Sicherungsdatei besteht bereits: " + str(backup))
         backup.write_bytes(raw)

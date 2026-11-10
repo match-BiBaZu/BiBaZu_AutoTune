@@ -1,4 +1,5 @@
 import copy
+import csv
 import json
 import threading
 from collections import Counter
@@ -30,19 +31,20 @@ def events_for(pulse, *, offset=1_000_000_000, through=None):
 
 def test_fixed_matrix_order_and_repetitions():
     matrix = pressure_matrix()
-    assert len(matrix) == 90
-    assert [p.number for p in matrix] == list(range(1, 91))
+    assert len(matrix) == 270
+    assert [p.number for p in matrix] == list(range(1, 271))
     assert Counter((p.pulse_ms, p.pressure_mbar) for p in matrix) == {
         (duration, pressure): 5
-        for duration in (20, 50, 100)
+        for duration in range(20, 101, 10)
         for pressure in range(1000, 6001, 1000)
     }
     assert [(p.pulse_ms, p.pressure_mbar, p.repetition) for p in matrix[:6]] == [
         (20, 1000, i) for i in range(1, 6)
     ] + [(20, 2000, 1)]
+    assert list(matrix) == sorted(matrix, key=lambda p: (p.pulse_ms, p.pressure_mbar, p.repetition))
 
 
-@pytest.mark.parametrize("index", [0, 30, 60, 89])
+@pytest.mark.parametrize("index", [*range(0, 270, 30), 269])
 def test_trace_reference_pressure_mean_and_native_duration(index):
     pulse = pressure_matrix()[index]
     result, rows = analyze_pressure_trace(pulse, events_for(pulse))
@@ -110,7 +112,7 @@ class ClockedPulsePlc:
         self.elapsed = 0
 
     def check(self):
-        return {"feature_version": 1}
+        return {"feature_version": 2}
 
     def subscribe(self):
         self.subscribed = True
@@ -205,7 +207,7 @@ def runner_for(tmp_path):
     return runner, adapter, backend, now, cancel
 
 
-def advance(runner, now, predicate, limit=20_000):
+def advance(runner, now, predicate, limit=60_000):
     for _ in range(limit):
         if predicate():
             return
@@ -214,34 +216,57 @@ def advance(runner, now, predicate, limit=20_000):
     raise AssertionError(runner.snapshot())
 
 
-def test_full_90_pulse_run_and_safe_end_state(tmp_path):
+def test_full_270_pulse_run_and_safe_end_state(tmp_path):
     runner, plc, backend, now, _ = runner_for(tmp_path)
     baseline = copy.deepcopy(backend.parameters)
     runner.start("token")
     assert plc.fired == []  # Start only subscribes; no immediate valve command.
     advance(runner, now, lambda: not runner.active)
     assert runner.snapshot()["status"] == "completed", runner.snapshot()["error"]
-    assert len(plc.fired) == 90
+    assert len(plc.fired) == 270
     assert [pulse for _, pulse in plc.fired] == list(pressure_matrix())
     for (first_time, pulse), (next_time, _) in zip(plc.fired, plc.fired[1:], strict=False):
         assert round((next_time - first_time) * 1000) - pulse.pulse_ms >= 3000
-    assert all(
-        round((fired[0] - entered) * 1000) >= 1000
-        for fired, entered in zip(plc.fired, plc.entered, strict=True)
-    )
+    for index, (fired, entered) in enumerate(zip(plc.fired, plc.entered, strict=True)):
+        first_in_combination = index % 5 == 0
+        assert round((fired[0] - entered) * 1000) >= (5000 if first_in_combination else 1000)
     assert not plc.active and not plc.subscribed
     assert all(not a["enabled"] for a in backend.parameters["arrays"])
     for original, restored in zip(baseline["arrays"], backend.parameters["arrays"], strict=True):
         assert {k: v for k, v in original.items() if k != "enabled"} == {
             k: v for k, v in restored.items() if k != "enabled"
         }
-    assert runner.snapshot()["completed"] == 90
+    assert runner.snapshot()["completed"] == 270
+    assert runner.snapshot()["total"] == 270
+    with (runner.recording.path / "combinations.csv").open(encoding="utf-8", newline="") as stream:
+        combinations = list(csv.DictReader(stream))
+    assert len(combinations) == 54
+    assert {int(row["pulse_ms"]) for row in combinations} == set(range(20, 101, 10))
+    assert {int(row["valid_count"]) for row in combinations} == {5}
+    assert runner.recording.manifest["timed_pulse_feature_version"] == 2
+    assert runner.recording.manifest["pause_ms"] == 3000
+    assert runner.recording.manifest["settle_ms"] == 1000
+    assert runner.recording.manifest["combination_settle_ms"] == 5000
     with (runner.recording.path / "samples.csv").open(encoding="utf-8", newline="") as stream:
-        import csv
-
         rows = list(csv.DictReader(stream))
-    assert {int(row["number"]) for row in rows} == set(range(1, 91))
+    assert {int(row["number"]) for row in rows} == set(range(1, 271))
     assert {row["complete"] for row in rows} == {"True"}
+
+
+def test_abort_during_new_combination_settling_never_fires_next_pulse(tmp_path):
+    runner, plc, _, now, cancel = runner_for(tmp_path)
+    # Adjacent combinations, including a duration change with the same pressure.
+    runner.matrix = tuple(pressure_matrix()[i] for i in (0, 5, 35))
+    runner.start("token")
+    advance(runner, now, lambda: runner.index == 2 and runner.phase == "settling")
+    assert len(plc.fired) == 2
+    now[0] = round(now[0] + 4, 6)
+    runner.tick()
+    assert len(plc.fired) == 2
+    cancel.set()
+    advance(runner, now, lambda: not runner.active)
+    assert plc.stopped and len(plc.fired) == 2
+    assert runner.snapshot()["status"] == "aborted"
 
 
 @pytest.mark.parametrize(

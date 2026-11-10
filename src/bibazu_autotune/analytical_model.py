@@ -17,6 +17,13 @@ from shapely import LineString, Point, polygons, union_all
 
 from .geometry import MeshAnalysis, Tensor, Vector
 from .orientation_animation import multiply
+from .pressure_scaling import (
+    DEFAULT_PRESSURE_SCALE_A,
+    DEFAULT_PRESSURE_SCALE_B_PA,
+    SpsPressurePrediction,
+    scale_pressure,
+    validate_pressure_scaling,
+)
 from .trial_context import normalize_quaternion
 
 Axis = Literal["x", "y", "z"]
@@ -88,6 +95,8 @@ class ModelConfiguration:
     contact_tolerance_m: float = 1e-6
     half_hit_lower: float = 0.25
     half_hit_upper: float = 0.75
+    pressure_scale_a: float = DEFAULT_PRESSURE_SCALE_A
+    pressure_scale_b_pa: float = DEFAULT_PRESSURE_SCALE_B_PA
     mounts: tuple[NozzleMount, ...] = field(default_factory=default_mounts)
     manual_axis: Axis | None = None
     manual_angle_deg: float = 90.0
@@ -116,6 +125,7 @@ class ModelConfiguration:
         )
 
     def validate(self):
+        validate_pressure_scaling(self.pressure_scale_a, self.pressure_scale_b_pa)
         positive = (
             self.diameter_m,
             self.distance_m,
@@ -804,8 +814,6 @@ class AnalyticalPressureModel:
             warnings.append(
                 "Nicht abgeschnürte Strömung nicht erfüllt; mathematische Extrapolation"
             )
-        if not 0 <= gauge_pa / 100 <= 6000:
-            warnings.append("Außerhalb der SPS-Druckgrenzen 0–6000 mbar")
         if not 0 <= impact.offset_m * 1000 <= 5000:
             warnings.append("Außerhalb der SPS-Offsetgrenzen 0–5000 mm")
         return PressurePrediction(
@@ -829,6 +837,7 @@ class CandidateResult:
     pressure: PressurePrediction | None = None
     center_m: Vector | None = None
     inertia_cm_kg_m2: Tensor | None = None
+    sps_pressure: SpsPressurePrediction | None = None
 
     @property
     def key(self) -> CandidateKey:
@@ -883,17 +892,31 @@ class AnalyticalModel:
                 mechanics = tipping_mechanics(body, turn, mount, config)
                 impact = self.offset.estimate(body, turn, mount, mechanics, config)
                 pressure = self.pressure.predict(body, mechanics, impact, pulse_ms, config)
+                sps_pressure = None
+                warnings = pressure.warnings
+                try:
+                    sps_pressure = scale_pressure(
+                        pressure.gauge_pa, config.pressure_scale_a, config.pressure_scale_b_pa
+                    )
+                    warnings += sps_pressure.warnings
+                except ValueError as exc:
+                    # Keep the completed mechanics/analytical result visible on scaling failure.
+                    warnings += (str(exc),)
                 results.append(
                     CandidateResult(
                         mount=mount,
                         turn=turn,
                         pulse_ms=pulse_ms,
-                        status="outside_model" if pressure.warnings else "ready",
-                        message="; ".join(pressure.warnings)
-                        or "Berechnet innerhalb des Modellbereichs",
+                        status="blocked"
+                        if sps_pressure is None
+                        else "outside_model"
+                        if warnings
+                        else "ready",
+                        message="; ".join(warnings) or "Berechnet innerhalb des Modellbereichs",
                         mechanics=mechanics,
                         impact=impact,
                         pressure=pressure,
+                        sps_pressure=sps_pressure,
                         center_m=_vector(body.center),
                         inertia_cm_kg_m2=_tensor(body.inertia),
                     )

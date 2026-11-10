@@ -35,6 +35,55 @@ def test_old_defaults_load_new_hit_thresholds_and_save_custom_thresholds(tmp_pat
     assert loaded.drag_coefficient == 0.8
 
 
+def test_old_defaults_add_scaling_and_save_signed_coefficients(tmp_path):
+    path = tmp_path / "defaults.json"
+    path.write_text(
+        json.dumps({"schema_version": 2, "model_parameters": {"drag_coefficient": 0.8}}),
+        "utf-8",
+    )
+    before = path.read_bytes()
+    store = ModelDefaultsStore(path)
+    config = store.load().configuration
+    assert config.pressure_scale_a == ModelConfiguration().pressure_scale_a
+    assert config.pressure_scale_b_pa == ModelConfiguration().pressure_scale_b_pa
+    assert path.read_bytes() == before
+    store.save_parameters(replace(config, pressure_scale_a=0.75, pressure_scale_b_pa=12345), 1200)
+    loaded = store.load().configuration
+    assert loaded.pressure_scale_a == 0.75
+    assert loaded.pressure_scale_b_pa == 12345
+    assert loaded.drag_coefficient == 0.8
+
+
+def test_scaling_controls_use_mbar_and_share_defaults_button(offline_window):
+    window, services, errors, _ = offline_window
+    panel = window.autotune_settings.model_panel
+    assert panel.fields["pressure_scale_a"][0].value() == pytest.approx(0.6544389198933329)
+    assert panel.fields["pressure_scale_b_pa"][0].value() == pytest.approx(-284.80891486008954)
+    panel.fields["pressure_scale_a"][0].setValue(0.75)
+    panel.fields["pressure_scale_b_pa"][0].setValue(-123.456)
+    assert panel.configuration().pressure_scale_b_pa == pytest.approx(-12345.6)
+    panel.save_parameters_button.click()
+    reopened = ModelPanel(defaults_path=panel.defaults_store.path)
+    try:
+        assert reopened.fields["pressure_scale_a"][0].value() == 0.75
+        assert reopened.fields["pressure_scale_b_pa"][0].value() == -123.456
+    finally:
+        reopened.deleteLater()
+    assert not services.calls and not errors
+
+
+@pytest.mark.parametrize("a,b", [(0, 0), (-1, 0), (float("inf"), 0), (1, float("nan"))])
+def test_invalid_scaling_does_not_overwrite_defaults(tmp_path, a, b):
+    store = ModelDefaultsStore(tmp_path / "defaults.json")
+    store.save_parameters(ModelConfiguration(), 1200)
+    before = store.path.read_bytes()
+    with pytest.raises(ValueError, match="Druckskalierung"):
+        store.save_parameters(
+            replace(ModelConfiguration(), pressure_scale_a=a, pressure_scale_b_pa=b), 1200
+        )
+    assert store.path.read_bytes() == before
+
+
 def test_parameters_and_mounts_are_saved_independently(tmp_path):
     store = ModelDefaultsStore(tmp_path / "settings/defaults.json")
     config = ModelConfiguration(

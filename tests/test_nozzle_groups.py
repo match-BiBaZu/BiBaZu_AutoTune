@@ -320,7 +320,7 @@ def test_gui_auto_selection_and_atomic_local_import(offline_window, tmp_path, wi
         if (mount.array_index, mount.nozzle_index) == (2, 2)
     ).setValue(-0.0001)
     assert settings.model_result is None and not window.import_button.isEnabled()
-    assert "Düse 2" in window.autotune_results.table.item(0, 8).text()
+    assert "Düse 2" in window.autotune_results.table.item(0, 9).text()
 
 
 def test_x_mount_input_accepts_signed_values_and_invalidates_results(offline_window, tmp_path):

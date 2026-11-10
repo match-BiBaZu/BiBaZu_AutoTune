@@ -9,24 +9,28 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from .analytical_model import ModelConfiguration
 from .model_defaults import ModelDefaults, ModelDefaultsStore, validate_density
+from .pressure_scaling import PRESSURE_SCALING_SOURCE
 
 
-class ModelPanel(QTabWidget):
+class ModelPanel(QWidget):
     changed = pyqtSignal()
 
     def __init__(self, parent=None, defaults_path=None):
@@ -42,92 +46,189 @@ class ModelPanel(QTabWidget):
             defaults = ModelDefaults()
             warning = "Gespeicherte Standardwerte konnten nicht geladen werden: " + str(exc)
         config = defaults.configuration
-        settings = QWidget()
-        form = QFormLayout(settings)
+        root = QVBoxLayout(self)
+        body = QHBoxLayout()
+        root.addLayout(body, 1)
+        self.navigation = QListWidget()
+        self.navigation.setMinimumWidth(210)
+        self.navigation.setMaximumWidth(245)
+        self.navigation.setSpacing(3)
+        self.pages = QStackedWidget()
+        body.addWidget(self.navigation)
+        body.addWidget(self.pages, 1)
+        self.section_pages = {}
+        self.section_keys = []
+        for key, title, description in (
+            (
+                "material",
+                "Material und Kippen",
+                "Materialdichte für Masse und Trägheit sowie Schwerkraft, Rinnenneigung "
+                "und gewünschte Kippbewegung.",
+            ),
+            (
+                "nozzles",
+                "Düsen und Luftstrahl",
+                "Geometrie einer schaltbaren Düse und Ausbreitung ihrer einzelnen Luftstrahlen.",
+            ),
+            (
+                "hits",
+                "Treffer und Offset",
+                "Bewertung der bestrahlten Bauteilfläche und Sicherheitsabstände "
+                "für den automatischen Kraftangriff.",
+            ),
+            (
+                "pressure",
+                "Analytischer Druck",
+                "Strömungsparameter für die Umrechnung der erforderlichen Kippkraft "
+                "in einen analytischen Druckvorschlag.",
+            ),
+            (
+                "scaling",
+                "SPS-Druckskalierung",
+                "Empirische Umrechnung des analytischen Überdrucks in den Sollwert "
+                "des SPS-Druckreglers.",
+            ),
+            (
+                "mounts",
+                "Montage je Array/Düse",
+                "Einbaupositionen, Reihenachsen und Strahlrichtungen der sechs Düsen je Array.",
+            ),
+        ):
+            self.add_section(key, title, description, scroll=key != "mounts")
+
+        material = self.add_group("material", "Material und Masse")
         self.density = QLineEdit(f"{defaults.density_kg_m3:g}")
         self.density.setPlaceholderText("Standard 1200; homogene Massenverteilung")
-        form.addRow("Materialdichte [kg/m³]", self.density)
-        pressure_hint = QLabel(
-            "0,05–0,80 bar Überdruck ist der Referenzbereich des Ausgangsmodells. "
-            "Die SPS erlaubt 0–6 bar. Berechnete Werte außerhalb des Referenzbereichs "
-            "werden weiterhin angezeigt und gekennzeichnet. Die Grenze für nicht "
-            "abgeschnürte Strömung wird separat geprüft."
+        material.addRow("Materialdichte [kg/m³]", self.density)
+        self.add_note(
+            material,
+            "Masse und physikalischer Trägheitstensor werden aus der STL-Geometrie "
+            "mit homogener Materialdichte berechnet. Werte unter »Geometrie prüfen« vergleichen.",
         )
-        pressure_hint.setWordWrap(True)
-        form.addRow(pressure_hint)
+        forms = {
+            "gravity": self.add_group("material", "Schwerkraft und Rinnenneigung"),
+            "tipping": self.add_group("material", "Kippbewegung und Kontakt"),
+            "openings": self.add_group("nozzles", "Lochreihe einer schaltbaren Düse"),
+            "jet": self.add_group("nozzles", "Strahlausbreitung"),
+            "coverage": self.add_group("hits", "Trefferbewertung"),
+            "offset": self.add_group("hits", "Sicherheitsabstände für den Offset"),
+            "flow": self.add_group("pressure", "Analytisches Strömungsmodell"),
+            "scaling": self.add_group("scaling", "SPS-Sollwert aus analytischem Druck"),
+        }
         self.count = QSpinBox()
         self.count.setRange(1, 256)
         self.count.setValue(config.opening_count)
-        form.addRow("Öffnungen je schaltbarer Düse", self.count)
+        forms["openings"].addRow("Öffnungen je schaltbarer Düse", self.count)
         specs = [
-            ("diameter_m", "Einzelöffnungsdurchmesser [mm]", 1000, 0.001, 100),
-            ("pitch_m", "Öffnungs-Mittenabstand [mm]", 1000, 0, 1000),
-            ("distance_m", "Düse–Bauteil-Abstand [mm]", 1000, 0.001, 10000),
-            ("spread_angle_deg", "Strahlöffnungswinkel [°]", 1, 0, 179),
-            ("margin_m", "Zusätzlicher Randabstand [mm]", 1000, 0, 1000),
-            ("offset_safety_m", "Zusätzliche Offsetreserve entlang X [mm]", 1000, 0, 1000),
-            ("half_hit_lower", "Gewicht 0,5 ab Überdeckung [%]", 100, 0.001, 50),
-            ("half_hit_upper", "Gewicht 1 ab Überdeckung [%]", 100, 50, 99.999),
-            ("drag_coefficient", "Widerstandsbeiwert c_d", 1, 0.001, 100),
-            ("mesh_coefficient", "Mesh-Koeffizient c_m", 1, 0.001, 100),
-            ("concentricity_coefficient", "Konzentrizitätsfaktor c_c", 1, 0.001, 100),
-            ("kappa", "Isentropenexponent κ", 1, 1.001, 5),
-            ("ambient_pa", "Umgebungsdruck absolut [bar]", 1e-5, 0.001, 100),
-            ("gravity_m_s2", "Schwerebeschleunigung [m/s²]", 1, 0.001, 100),
-            ("uphill_deg", "X-Neigung, positiv bergauf [°]", 1, -89, 89),
-            ("cross_slope_deg", "Querneigung [°]", 1, 0, 90),
-            ("contact_tolerance_m", "Kontakt-Toleranz [mm]", 1000, 0.00001, 1),
+            ("openings", "diameter_m", "Einzelöffnungsdurchmesser [mm]", 1000, 0.001, 100),
+            ("openings", "pitch_m", "Öffnungs-Mittenabstand [mm]", 1000, 0, 1000),
+            ("jet", "distance_m", "Düse–Bauteil-Abstand [mm]", 1000, 0.001, 10000),
+            ("jet", "spread_angle_deg", "Strahlöffnungswinkel [°]", 1, 0, 179),
+            ("offset", "margin_m", "Zusätzlicher Randabstand [mm]", 1000, 0, 1000),
+            (
+                "offset",
+                "offset_safety_m",
+                "Zusätzliche Offsetreserve entlang X [mm]",
+                1000,
+                0,
+                1000,
+            ),
+            ("coverage", "half_hit_lower", "Gewicht 0,5 ab Überdeckung [%]", 100, 0.001, 50),
+            ("coverage", "half_hit_upper", "Gewicht 1 ab Überdeckung [%]", 100, 50, 99.999),
+            ("flow", "drag_coefficient", "Widerstandsbeiwert c_d", 1, 0.001, 100),
+            ("flow", "mesh_coefficient", "Mesh-Koeffizient c_m", 1, 0.001, 100),
+            ("flow", "concentricity_coefficient", "Konzentrizitätsfaktor c_c", 1, 0.001, 100),
+            ("flow", "kappa", "Isentropenexponent κ", 1, 1.001, 5),
+            ("flow", "ambient_pa", "Umgebungsdruck absolut [bar]", 1e-5, 0.001, 100),
+            ("gravity", "gravity_m_s2", "Schwerebeschleunigung [m/s²]", 1, 0.001, 100),
+            ("gravity", "uphill_deg", "X-Neigung, positiv bergauf [°]", 1, -89, 89),
+            ("gravity", "cross_slope_deg", "Querneigung [°]", 1, 0, 90),
+            ("tipping", "contact_tolerance_m", "Kontakt-Toleranz [mm]", 1000, 0.00001, 1),
         ]
-        for name, label, scale, low, high in specs:
+        for group, name, label, scale, low, high in specs:
             control = QDoubleSpinBox()
             control.setDecimals(6)
             control.setRange(low, high)
             control.setValue(getattr(config, name) * scale)
             self.fields[name] = (control, scale)
-            form.addRow(label, control)
+            forms[group].addRow(label, control)
         self.fields["offset_safety_m"][0].setToolTip(
             "Zusätzliche Sicherheit in beide Förderrichtungen, über Strahlradius und "
             "Randabstand hinaus. Standard 5 mm. Der Kraftangriff liegt weiter innerhalb "
             "der Bauteilfläche; seitliche Reihenabstände bleiben unverändert. "
             "0 mm stellt die bisherige Offsetauswahl wieder her."
         )
+        self.add_note(
+            forms["coverage"],
+            "Überdeckung der projizierten Bauteilfläche: unter der unteren Grenze Gewicht 0, "
+            "dazwischen 0,5, ab der oberen Grenze 1. Die Düsenfreigabe berücksichtigt "
+            "zusätzlich Volltreffer und Sicherheitsabstände.",
+        )
+        self.add_note(
+            forms["flow"],
+            "0,05–0,80 bar Überdruck ist der Referenzbereich des Ausgangsmodells. "
+            "Die Grenze für nicht abgeschnürte Strömung wird separat geprüft. "
+            "Den analytischen Druck und die erforderliche Kraft zeigen die Ergebnisse.",
+        )
+        self.add_note(
+            forms["flow"],
+            "Die Impulsdauer je Array wird auf der Hauptseite im Parametereditor eingestellt.",
+        )
+        self.add_note(
+            forms["scaling"],
+            "p_SPS = (p_analytisch − b) / a; Drücke in mbar. "
+            "Der analytische Druck bleibt in den Ergebnissen sichtbar. "
+            "Übernommen wird der SPS-Sollwert innerhalb 0–6000 mbar.",
+        )
+        for name, text, scale, decimals, low, high in (
+            ("pressure_scale_a", "Druckskalierung a [–]", 1, 12, 1e-12, 1e6),
+            ("pressure_scale_b_pa", "Druckskalierung b [mbar]", 0.01, 9, -1e9, 1e9),
+        ):
+            control = QDoubleSpinBox()
+            control.setDecimals(decimals)
+            control.setRange(low, high)
+            control.setValue(getattr(config, name) * scale)
+            self.fields[name] = (control, scale)
+            forms["scaling"].addRow(text, control)
+        self.add_note(forms["scaling"], PRESSURE_SCALING_SOURCE)
         self.outer_width = QDoubleSpinBox()
         self.outer_width.setDecimals(6)
         self.outer_width.setRange(0.001, 100000)
         self.outer_width.setValue(config.outer_width_m * 1000)
-        form.insertRow(3, "Außenbreite der Öffnungen [mm]", self.outer_width)
+        forms["openings"].addRow("Außenbreite der Öffnungen [mm]", self.outer_width)
         self.center_span = QLabel(f"{config.center_span_m * 1000:g}")
         self.center_span.setToolTip(
             "Abstand zwischen erster und letzter Lochmitte: (Öffnungszahl − 1) × Teilung. "
             "Bei acht Öffnungen und 2,8 mm Teilung ergibt das 19,6 mm."
         )
-        form.insertRow(4, "Abstand erste–letzte Lochmitte [mm]", self.center_span)
+        forms["openings"].addRow("Abstand erste–letzte Lochmitte [mm]", self.center_span)
         self.manual_axis = QComboBox()
         self.manual_axis.addItems(["Automatisch aus Posen/Roadmap", "X", "Y", "Z"])
         self.manual_angle = QDoubleSpinBox()
         self.manual_angle.setRange(-360, 360)
         self.manual_angle.setValue(90)
-        form.addRow(QLabel("Manuelle Drehung: gilt nur für den aktuellen Übergang."))
-        form.addRow("Manuelle Achse bei mehrdeutigen Posen", self.manual_axis)
-        form.addRow("Manueller Drehwinkel mit Vorzeichen [°]", self.manual_angle)
-        form.addRow(
-            QLabel(
-                "Auswertung am Impulsbeginn; Bewegung während des Impulses bleibt unberücksichtigt."
-            )
+        self.add_note(forms["tipping"], "Manuelle Drehung: gilt nur für den aktuellen Übergang.")
+        forms["tipping"].addRow("Manuelle Achse bei mehrdeutigen Posen", self.manual_axis)
+        forms["tipping"].addRow("Manueller Drehwinkel mit Vorzeichen [°]", self.manual_angle)
+        self.add_note(
+            forms["tipping"],
+            "Auswertung am Impulsbeginn; Bewegung während des Impulses bleibt unberücksichtigt.",
         )
-        scroll = QScrollArea()
-        self.save_parameters_button = QPushButton("Aktuelle Modellparameter als Standard speichern")
+        self.parameters_footer = QWidget()
+        footer = QVBoxLayout(self.parameters_footer)
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.addWidget(
+            QLabel("Speichert alle Modellbereiche; Montagewerte werden separat gespeichert.")
+        )
+        self.save_parameters_button = QPushButton(
+            "Modellwerte aller Bereiche als Standard speichern"
+        )
         self.save_parameters_button.clicked.connect(self.save_parameters_defaults)
         self.parameters_status = QLabel(warning)
         self.parameters_status.setWordWrap(True)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(settings)
-        parameters_page = QWidget()
-        parameters_layout = QVBoxLayout(parameters_page)
-        parameters_layout.addWidget(scroll)
-        parameters_layout.addWidget(self.save_parameters_button)
-        parameters_layout.addWidget(self.parameters_status)
-        self.addTab(parameters_page, "Modellparameter")
+        footer.addWidget(self.save_parameters_button)
+        footer.addWidget(self.parameters_status)
+        root.addWidget(self.parameters_footer)
         self.mount_table = QTableWidget(len(config.mounts), 6)
         self.mount_table.setHorizontalHeaderLabels(
             [
@@ -182,8 +283,7 @@ class ModelPanel(QTabWidget):
         self.mount_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
-        montage = QWidget()
-        montage_layout = QVBoxLayout(montage)
+        montage_layout = self.section_pages["mounts"].layout()
         instructions = QLabel(
             "Düsen 1–3 und 4–6 verlängern jeweils dieselbe Lochreihe. "
             "Alle drei Montagepositionen müssen bekannt sein. Zugeschaltet wird eine Düse "
@@ -193,14 +293,22 @@ class ModelPanel(QTabWidget):
         )
         instructions.setWordWrap(True)
         montage_layout.addWidget(instructions)
-        montage_layout.addWidget(self.mount_table)
-        self.save_mounts_button = QPushButton("Aktuelle Montagewerte als Standard speichern")
+        self.mount_filter = QComboBox()
+        self.mount_filter.addItem("Alle Arrays", 0)
+        for array in range(1, 5):
+            self.mount_filter.addItem(f"Array {array}", array)
+        self.mount_filter.currentIndexChanged.connect(self.filter_mounts)
+        montage_layout.addWidget(self.mount_filter)
+        montage_layout.addWidget(self.mount_table, 1)
+        self.save_mounts_button = QPushButton("Montagewerte aller Arrays als Standard speichern")
         self.save_mounts_button.clicked.connect(self.save_mounts_defaults)
         montage_layout.addWidget(self.save_mounts_button)
         self.mounts_status = QLabel(warning)
         self.mounts_status.setWordWrap(True)
         montage_layout.addWidget(self.mounts_status)
-        self.addTab(montage, "Montage je Array/Düse")
+        for key, page in self.section_pages.items():
+            if key != "mounts":
+                page.layout().addStretch()
         self._linking = False
         self.count.valueChanged.connect(self.link_pitch)
         self.fields["diameter_m"][0].valueChanged.connect(self.link_pitch)
@@ -211,6 +319,54 @@ class ModelPanel(QTabWidget):
         self.count.valueChanged.connect(self.changed)
         self.manual_axis.currentTextChanged.connect(self.changed)
         self.manual_angle.valueChanged.connect(self.changed)
+        self.navigation.currentRowChanged.connect(self.show_section)
+        self.navigation.setCurrentRow(0)
+
+    def add_section(self, key, title, description, *, scroll):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        heading = QLabel(title)
+        font = heading.font()
+        font.setBold(True)
+        font.setPointSizeF(font.pointSizeF() + 2)
+        heading.setFont(font)
+        layout.addWidget(heading)
+        help_text = QLabel(description)
+        help_text.setWordWrap(True)
+        layout.addWidget(help_text)
+        self.section_keys.append(key)
+        self.section_pages[key] = page
+        self.navigation.addItem(title)
+        self.navigation.item(self.navigation.count() - 1).setToolTip(description)
+        if scroll:
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setWidget(page)
+            self.pages.addWidget(area)
+        else:
+            self.pages.addWidget(page)
+
+    def add_group(self, section, title):
+        group = QGroupBox(title)
+        self.section_pages[section].layout().addWidget(group)
+        return QFormLayout(group)
+
+    @staticmethod
+    def add_note(form, text):
+        note = QLabel(text)
+        note.setWordWrap(True)
+        form.addRow(note)
+
+    def show_section(self, index):
+        if index < 0:
+            return
+        self.pages.setCurrentIndex(index)
+        self.parameters_footer.setVisible(self.section_keys[index] != "mounts")
+
+    def filter_mounts(self):
+        array = self.mount_filter.currentData()
+        for row, (mount, _, _, _) in enumerate(self.mount_rows):
+            self.mount_table.setRowHidden(row, bool(array and array != mount.array_index))
 
     def link_pitch(self):
         if self._linking:

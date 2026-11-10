@@ -6,6 +6,7 @@ from test_candidate_transfer import candidate
 from test_gui import offline_window as offline_window
 from test_model_gui import prepare
 
+from bibazu_autotune.analytical_model import PressurePrediction
 from bibazu_autotune.candidate_transfer import candidate_parameters
 
 
@@ -16,6 +17,42 @@ def calculate(window, wait, tmp_path):
     window.calculate_button.click()
     wait(lambda: settings.model_result is not None)
     return settings.model_result
+
+
+def test_analytical_and_scaled_pressure_are_separate_and_button_imports_scaled(
+    offline_window, tmp_path
+):
+    window, services, errors, wait = offline_window
+    settings, _ = prepare(window, wait, tmp_path)
+
+    class Pressure:
+        def predict(self, body, mechanics, impact, pulse_ms, config):
+            return PressurePrediction(1, config.ambient_pa + 200000, 200000, 90000, ())
+
+    settings.pipeline.model.pressure = Pressure()
+    window.editor.speed.setValue(80)
+    original = window.editor.parameters()
+    window.calculate_button.click()
+    wait(lambda: settings.model_result is not None)
+    selected = window.autotune_results.selected_candidate()
+    assert selected.pressure.gauge_pa == 200000
+    assert selected.sps_pressure.gauge_pa / 100 == pytest.approx(3491.24852665)
+    table = window.autotune_results.table
+    assert table.horizontalHeaderItem(5).text() == "Analytischer Überdruck [mbar]"
+    assert table.horizontalHeaderItem(6).text() == "SPS-Sollwert [mbar]"
+    assert float(table.item(0, 5).text()) == 2000
+    assert float(table.item(0, 6).text()) == pytest.approx(3491.24852665, rel=1e-5)
+    details = window.autotune_results.details.toPlainText()
+    assert "SPS-Druckskalierung" in details and "284.808" in details
+    assert "100 ms, Array 2/Düse 1" in details
+    assert window.editor.parameters() == original
+    window.import_button.click()
+    assert (
+        window.editor.parameters()["arrays"][selected.mount.array_index - 1]["pressure_mbar"]
+        == 3491
+    )
+    assert "skaliertem SPS-Sollwert 3491 mbar" in window.autotune_status.text()
+    assert not services.calls and not errors
 
 
 def show_candidate(window, result, value):
@@ -76,7 +113,9 @@ def test_current_variant_and_editor_changes_are_preserved(offline_window, tmp_pa
     assert not services.calls and not errors
 
 
-@pytest.mark.parametrize("reason", ["zero_speed", "pressure", "offset", "blocked", "stale"])
+@pytest.mark.parametrize(
+    "reason", ["zero_speed", "pressure", "offset", "blocked", "stale", "missing_scaling"]
+)
 def test_import_failure_is_atomic(offline_window, tmp_path, reason):
     window, services, errors, wait = offline_window
     result = calculate(window, wait, tmp_path)
@@ -88,6 +127,10 @@ def test_import_failure_is_atomic(offline_window, tmp_path, reason):
         show_candidate(window, result, candidate(offset=5000.001))
     elif reason == "blocked":
         show_candidate(window, result, candidate(status="blocked"))
+    elif reason == "missing_scaling":
+        show_candidate(window, result, replace(candidate(pressure=2000), sps_pressure=None))
+        assert window.autotune_results.table.item(0, 5).text() == "2000"
+        assert window.autotune_results.table.item(0, 6).text() == "—"
     elif reason == "stale":
         window.editor.rows[1]["pulse_duration_ms"].setValue(300)
     before = copy.deepcopy(window.editor.parameters())
@@ -129,7 +172,9 @@ def test_warning_candidate_and_selection_and_trial_lock(offline_window, tmp_path
     assert not services.calls and not errors
 
 
-@pytest.mark.parametrize("change", ["density", "unit", "mesh", "pose", "model", "mount", "pulse"])
+@pytest.mark.parametrize(
+    "change", ["density", "unit", "mesh", "pose", "model", "mount", "pulse", "scale_a", "scale_b"]
+)
 def test_settings_changes_invalidate_results(offline_window, tmp_path, change):
     window, _, _, wait = offline_window
     result = calculate(window, wait, tmp_path)
@@ -148,6 +193,10 @@ def test_settings_changes_invalidate_results(offline_window, tmp_path, change):
         settings.model_panel.fields["drag_coefficient"][0].setValue(1.1)
     elif change == "mount":
         settings.model_panel.mount_rows[0][3].setValue(30)
+    elif change == "scale_a":
+        settings.model_panel.fields["pressure_scale_a"][0].setValue(0.8)
+    elif change == "scale_b":
+        settings.model_panel.fields["pressure_scale_b_pa"][0].setValue(-300)
     else:
         window.editor.rows[0]["pulse_duration_ms"].setValue(200)
     assert settings.model_result is None

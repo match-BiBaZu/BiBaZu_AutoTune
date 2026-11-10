@@ -88,10 +88,15 @@ bestätigen und den folgenden Ablauf verwenden.
 AutoTune und Pressure Control vorher schließen, da der Test denselben exklusiven
 SPS-Zugriff verwendet. Öffnen und **SPS verbinden** starten keinen Luftstoß.
 **Testreihe starten** führt ausschließlich an **Array 2, Düse 1 / OpenValve5** aus:
-20, 50 und 100 ms, jeweils 1000–6000 mbar in 1000-mbar-Schritten und fünf Wiederholungen.
-Das sind 90 Stöße, nach Impulsdauer, Druck und Wiederholung sortiert.
-Zwischen Ventilschluss und dem nächsten Stoß liegen mindestens drei Sekunden;
-der neue Sollwert erhält mindestens eine Sekunde Einschwingzeit innerhalb dieser Pause.
+20 bis 100 ms in 10-ms-Schritten, jeweils 1000–6000 mbar in 1000-mbar-Schritten
+und fünf Wiederholungen. Das sind 270 Stöße, nach Impulsdauer, Druck und Wiederholung
+sortiert. Die Reihe wird erst über **Testreihe starten** ausgelöst.
+Zwischen Ventilschluss und dem nächsten Stoß liegen mindestens drei Sekunden.
+Vor dem ersten Stoß jeder neuen Druck-/Impulsdauer-Kombination wird nach bestätigter
+Parametereinstellung mindestens **fünf Sekunden Einschwingzeit** gewartet, auch zu
+Beginn des Laufs und beim Wechsel der Impulsdauer zurück auf 1000 mbar.
+Innerhalb der fünf Wiederholungen beträgt die Einschwingzeit mindestens eine Sekunde
+und liegt innerhalb der Stoßpause. Die Wartezeiten werden in `run.json` dokumentiert.
 Band und andere Düsen bleiben aus. Lichtschranke 4 muss frei sein.
 
 **Abbrechen** verwendet eine separate HTTP-Verbindung und einen priorisierten SPS-Auftrag.
@@ -122,9 +127,12 @@ Kalibrierfunktion: drei zusätzliche Variablen und eine begrenzte Ergänzung von
 Validierung und automatischem Ventilschluss. Normaler Kalibrierbetrieb, bestehende
 Watchdogs, E/A-Zuordnung und die normale Anlagenlogik bleiben bestehen.
 `tools/install_pressure_test_plc.py <MAIN.TcPOU>` zeigt den Quelltextpatch;
-`--apply` schreibt ihn mit Sicherungskopie. Der Installer lädt nichts auf die SPS.
+`--apply` schreibt ihn mit Sicherungskopie (`.TcPOU.before-pressure-test-v2`).
+Er unterstützt auch die bisherige Kurzimpuls-Version 1 (20/50/100 ms) und erweitert
+sie auf Version 2; vorhandene Sicherungen und Messläufe bleiben erhalten.
+Der Installer lädt nichts auf die SPS.
 Die neue Quelle anschließend in TwinCAT bauen und laden. Das Testfenster verweigert
-den Start ohne `ProbeCalibrationTimedPulseVersion = 1`.
+den Start ohne `ProbeCalibrationTimedPulseVersion = 2`.
 
 Nur für ausdrücklich angeforderte automatische Ausführung steht
 `./Start-Drucktest.ps1 --auto-run` zur Verfügung; dieser Aufruf verbindet und startet
@@ -141,7 +149,7 @@ wird die bisherige Mesh-Zuordnung verworfen.
 
 1. STL-Koordinateneinheit wählen: standardmäßig **mm**, alternativ **cm** oder **m**.
    ASCII- und Binär-STL werden unterstützt; die Quelldatei bleibt unverändert.
-2. Unter **Autotune-Einstellungen → Modell und Montage → Modellparameter** ist die Materialdichte
+2. Unter **Autotune-Einstellungen → Modell und Anlage → Material und Kippen** ist die Materialdichte
    zunächst mit **1200 kg/m³** vorbelegt. Für ein anderes Material dort anpassen;
    Masse und physikalische Trägheit werden neu berechnet. Die Dichte bleibt beim
    Bauteilwechsel erhalten. Die Berechnung setzt eine homogene Massenverteilung
@@ -166,8 +174,21 @@ wird die bisherige Mesh-Zuordnung verworfen.
    Die Quaternionen werden normalisiert und als Mesh-Vorschau angezeigt.
    Erst **Manuelle Posen bestätigen** gibt den Übergang für Trainingsversuche frei.
    Änderungen an den Posen oder ein neuer STL-Import heben die Bestätigung auf.
-5. Unter **Modell und Montage** die Modellparameter und Montagepositionen prüfen.
-   Die Buttons zum Speichern der Modell- und Montagestandards bleiben dort verfügbar.
+5. Unter **Modell und Anlage** links den passenden Bereich auswählen:
+
+   | Bereich | Einstellungen |
+   | --- | --- |
+   | **Material und Kippen** | Dichte, Schwerkraft, Anlagenneigung, Kontakt-Toleranz und manuelle Kippachse/-winkel |
+   | **Düsen und Luftstrahl** | Öffnungszahl, Durchmesser, Teilung, Breiten, Düsenabstand und Strahlöffnungswinkel |
+   | **Treffer und Offset** | Grenzen für Treffergewichte, Randabstand und Offsetreserve |
+   | **Analytischer Druck** | Strömungsbeiwerte, Isentropenexponent und Umgebungsdruck |
+   | **SPS-Druckskalierung** | Koeffizienten a/b und Erklärung der Druckumrechnung |
+   | **Montage je Array/Düse** | Reihenmitten, Achsen und X-Versätze; Anzeige nach Array filterbar |
+
+   Jeder Bereich erklärt seine Aufgabe und gruppiert zusammengehörige Eingaben.
+   Ein Bereichswechsel erhält Eingaben und Ergebnisse. Die Impulsdauer bleibt
+   im Parametereditor auf der Hauptseite. Modell- und Montagestandards werden
+   weiterhin getrennt gespeichert; der Arrayfilter ändert nur die Anzeige.
 6. Auf der **Hauptseite** im manuellen Parametereditor die Impulsdauer je Array
    vorgeben und im unteren Reiter **Autotune-Ergebnisse** **Berechnung durchführen** wählen.
    Direkt daneben stehen **Ergebnisse in Ausgangswerte schreiben** und der Berechnungsstatus.
@@ -177,6 +198,8 @@ wird die bisherige Mesh-Zuordnung verworfen.
 7. Unter **Autotune-Ergebnisse** einen Kandidaten auswählen. Tabelle, Trefferbild
    und Details gehören zu diesem Kandidaten. **Kraft [N]** zeigt die berechnete
    mittlere erforderliche Gesamtkraft der aktiven Düsen am Bauteil.
+   **Analytischer Überdruck [mbar]** bleibt das unveränderte Ergebnis des
+   physikalischen Modells; **SPS-Sollwert [mbar]** zeigt den separat skalierten Druck.
    **Versuchsprotokoll** enthält separat
    Kameraverlauf und Versuchsergebnisse; der manuelle Editor bleibt sichtbar.
 8. Für die Übernahme eine **Bandgeschwindigkeit größer als 0 mm/s** eintragen und
@@ -184,7 +207,8 @@ wird die bisherige Mesh-Zuordnung verworfen.
    sichtbaren Parametersatz und die aktuell bearbeitete Variante. Ohne vorhandene
    Variante wird **Ausgangswerte** angelegt und ausgewählt.
 
-Übernommen werden Druck und Offset des ausgewählten Arrays. Dieses Array wird
+Übernommen werden der **skalierte SPS-Sollwert** und der Offset des ausgewählten Arrays.
+Fehlt eine gültige Skalierung, wird kein analytischer Ersatzwert übernommen. Dieses Array wird
 aktiviert, ausschließlich seine automatisch ausgewählten Düsen eingeschaltet und **Offset mit
 Bandsollwert** aktiviert. Andere Arrays sowie Impulsdauer, Verzögerung und
 Bandgeschwindigkeit bleiben erhalten. Die ungerundeten Werte müssen endlich und
@@ -255,7 +279,7 @@ Auch **nur Düse 2** ist möglich: Vorgänger werden nicht zwangsweise mitgescha
 Für eingeschaltete Düsen werden alle acht Öffnungen mit ihren Gewichten 0/0,5/1
 berücksichtigt. Die Kandidatentabelle nennt die automatisch ausgewählten Düsen.
 
-Unter **Modellparameter** gelten acht Öffnungen mit gemessenem **Radius 0,4 mm**,
+Unter **Düsen und Luftstrahl** gelten acht Öffnungen mit gemessenem **Radius 0,4 mm**,
 also **Durchmesser 0,8 mm**, und **2,8 mm Lochmittenabstand**.
 Der Abstand von erster zu letzter Lochmitte ist damit **7 × 2,8 = 19,6 mm**;
 die Außenbreite über die Öffnungskanten beträgt **19,6 + 0,8 = 20,4 mm**.
@@ -268,16 +292,18 @@ Umgebungsdruck und g=9,81 m/s². Außenbreite und Teilung werden gekoppelt editi
 der Abstand zwischen erster und letzter Lochmitte wird daraus berechnet. Der Konzentrizitätsfaktor
 c_c ist ein expliziter Faktor und wird nicht aus einem einzelnen Bauteilradius abgeleitet.
 
-**Startwerte speichern:** Unter **Modellparameter** übernimmt **Aktuelle Modellparameter
-als Standard speichern** die physikalischen Modellparameter einschließlich Dichte
+**Startwerte speichern:** **Modellwerte aller Bereiche als Standard speichern**
+übernimmt die physikalischen Modellparameter einschließlich Dichte und SPS-Skalierung
 als Vorgaben für den nächsten Programmstart. Unter **Montage je Array/Düse** speichert
-**Aktuelle Montagewerte als Standard speichern** die Reihenmitten und Achszuordnungen.
+**Montagewerte aller Arrays als Standard speichern** die Reihenmitten und Achszuordnungen
+aller Arrays, auch bei gefilterter Anzeige. Im Montagebereich wird nur diese
+Montageschaltfläche angezeigt; in den übrigen Bereichen die gemeinsame Modellschaltfläche.
 Beide Aktionen sind unabhängig; das Speichern der Montage überschreibt keine
 Modellparameter und umgekehrt. Änderungen ohne Speichern gelten nur in der Sitzung.
 Manuelle Achsen-/Drehwinkelkorrekturen gelten für den aktuellen Übergang und werden
 nicht als allgemeine Startwerte gespeichert. Die Vorgaben liegen unter Windows in
 `%APPDATA%\BiBaZuAutoTune\autotune_defaults.json`. Fehler beim Laden oder Speichern
-werden im jeweiligen Reiter angezeigt; eine beschädigte Datei wird nicht stillschweigend
+werden im jeweiligen Bereich angezeigt; eine beschädigte Datei wird nicht stillschweigend
 überschrieben. Weder das Speichern noch das Laden schreibt SPS-Parameter.
 Alte Standarddateien (Version 1, bisher acht Montagepositionen) werden beim Laden
 im Speicher auf 24 Positionen ergänzt. Gespeicherte Maße für Düse 1/4 bleiben erhalten;
@@ -305,13 +331,13 @@ müssen Achse und vorzeichenbehafteter Winkel bestätigt werden; sie müssen zur
 Jede Öffnung erhält ein Treffergewicht **0, 0,5 oder 1**, abhängig davon, welcher
 Anteil ihres Strahlquerschnitts von der projizierten Bauteilfläche überdeckt wird.
 Die Standardgrenzen sind **unter 25 % → 0**, **25 bis unter 75 % → 0,5** und
-**ab 75 % → 1**. Die beiden Grenzen sind unter **Modellparameter** als Prozentwerte
+**ab 75 % → 1**. Die beiden Grenzen sind unter **Treffer und Offset** als Prozentwerte
 einstellbar und können mit den Modellstandards gespeichert werden. Die Überdeckung
 wird aus der Schnittfläche eines numerisch mit 512 Seiten angenäherten Strahlkreises
 und der Bauteilprojektion bestimmt. Eine bloße Tangentialberührung zählt nicht;
 Aussparungen werden aus dem vollständigen Mesh berücksichtigt.
 Der zusätzliche Randabstand dient der Offsetauslegung und wird nicht von der
-Trefferfläche abgezogen. Unter **Modellparameter → Zusätzliche Offsetreserve entlang X**
+Trefferfläche abgezogen. Unter **Treffer und Offset → Zusätzliche Offsetreserve entlang X**
 werden standardmäßig weitere **5 mm in beiden X-Richtungen** berücksichtigt.
 Ein Volltreffer für die Düsenfreigabe muss damit auch bei einer Verschiebung innerhalb
 dieser Reserve vollständig einschließlich Randabstand auf derselben Fläche liegen;
@@ -399,6 +425,35 @@ deren Grenze bei etwa 0,905 bar Überdruck. Die SPS-Freigabe bis 6 bar erweitert
 Modellannahme nicht. Theoretische Werte außerhalb des Referenzbereichs, außerhalb der SPS-Grenzen oder
 oberhalb der kritischen Strömungsgrenze werden unverändert mit Status angezeigt.
 Der kritische Überdruck ist p_a * (((κ+1)/2)^(κ/(κ−1)) − 1). Es erfolgt keine Kappung.
+
+**Empirische SPS-Druckskalierung:** Nach dem analytischen Modell wird der Sollwert
+als `p_SPS = (p_analytisch − b) / a` berechnet. Alle Drücke sind Überdrücke;
+intern werden Pa verwendet, in der GUI mbar. Der analytische Absolutdruck ist
+kein Eingang der Skalierung. Unter **SPS-Druckskalierung** sind **Druckskalierung a [–]**
+und **Druckskalierung b [mbar]** einstellbar. a muss endlich und positiv sein,
+b endlich; beide Vorzeichen von b sind erlaubt. Die vorhandene Schaltfläche
+zum Speichern der Modellstandards speichert auch diese Werte. Alte Standarddateien
+erhalten fehlende Felder beim Laden im Speicher, ohne dabei überschrieben zu werden.
+
+Die Vorgaben `a = 0,6544389198933329` und `b = −284,80891486008954 mbar`
+stammen aus dem Spitzendruck-Fit bei **100 ms, Array 2/Düse 1**, Messlauf
+`53f1095c8f3244b182ab08c3980a6dac`: Wiederholungen 2–5 der sechs Druckstufen,
+insgesamt 24 Messungen. Dieses eine Paar gilt vorläufig für **alle Arrays,
+Düsenkombinationen und Impulsdauern**, ohne automatische Umschaltung.
+Beispiel: 2000 mbar analytischer Druck ergeben 3491,24852665 mbar SPS-Sollwert;
+übernommen werden kaufmännisch gerundet **3491 mbar**. Mit a=1 und b=0 ist die
+Skalierung neutral. Änderungen an a oder b verlangen eine neue Berechnung.
+
+Spitzendruck und analytisch angenommener Druck sind damit empirisch zugeordnet;
+die tatsächliche Kippwirkung sowie andere Düsen-/Versorgungszustände sind dadurch
+nicht gesondert validiert. Die Details zeigen Formel, aktuelle Koeffizienten und
+Herkunft. Die SPS-Druckgrenzen 0–6000 mbar werden am **skalierten** Wert geprüft;
+Referenzbereich und Strömungsgrenze bleiben Prüfungen des analytischen Drucks.
+Endliche Ergebnisse außerhalb der Grenzen bleiben sichtbar. Die Übernahme prüft
+vor dem Runden und lehnt ungültige Werte ohne Kappung und ohne Teiländerungen ab.
+Berechnungen allein schreiben keine Parameter; erst die ausdrückliche Übernahme
+in den Editor löst dessen bestehende Live-Synchronisierung aus.
+
 Die Strahlen aller zugeschalteten Düsen werden als additive Einzelstrahlen bei gemeinsamem Druck
 angenommen. Strahlwechselwirkungen, Reibung und die Band-/Kippbewegung während
 des Impulses sind nicht zusätzlich modelliert: Treffer und Hebelarm gelten am Impulsbeginn.

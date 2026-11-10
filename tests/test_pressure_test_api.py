@@ -1,5 +1,7 @@
 import time
+from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from test_engine import parameters
 from test_pressure_service import MemoryMutex, MemoryPlc, acquire, operation, wait_for
@@ -7,8 +9,29 @@ from test_pressure_test import ClockedPulsePlc
 
 from bibazu_autotune.plc import AdsBackend
 from bibazu_autotune.pressure_service import PressureService
+from bibazu_autotune.pressure_test_plc import INFO, PressurePulsePlc
 
 REQUEST = {"request_id": "a" * 32}
+
+
+@pytest.mark.parametrize("version", [0, 1, 2, 3])
+def test_only_version_2_enables_expanded_matrix_without_writes(version):
+    values = {"MAIN." + name: 0 for name in INFO.values()}
+    values["MAIN.ProbeCalibrationTimedPulseVersion"] = version
+    values["MAIN.LightBarrierStable4"] = True
+    checked = []
+    backend = SimpleNamespace(
+        read=lambda names: {name: values[name] for name in names},
+        ensure_stationary=lambda: checked.append("stationary"),
+    )
+    adapter = PressurePulsePlc(backend)
+    if version == 2:
+        assert adapter.check()["feature_version"] == 2
+        assert checked == ["stationary"]
+    else:
+        with pytest.raises(RuntimeError, match="Version 2"):
+            adapter.check()
+        assert not checked
 
 
 def test_missing_plc_feature_blocks_check_without_writing(tmp_path):

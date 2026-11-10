@@ -135,6 +135,18 @@ def test_replacement_stages_obey_dependencies(tmp_path):
     result = pipeline.prepare(analysis, manual(analysis.sha256), parameters(), config)
     assert calls == ["offset", "pressure", "offset", "pressure", "ml"]
     assert result.ml.value == {(2, 1): 125, (4, 1): 125}
+    assert result.pressure.value == {(2, 1): 120, (4, 1): 120}
+    assert result.sps_pressure.status == "ready"
+    assert result.sps_pressure.value != result.pressure.value
+    failed_scaling = pipeline.prepare(
+        analysis,
+        manual(analysis.sha256),
+        parameters(),
+        replace(config, pressure_scale_a=1e-310),
+    )
+    assert failed_scaling.sps_pressure.status == "blocked"
+    assert all(c.pressure is not None for c in failed_scaling.candidates)
+    assert failed_scaling.ml.value == result.ml.value  # ML still consumes analytical pressures.
 
 
 def test_complete_manual_trial_logs_only_pose_context_and_starts_new_runs(tmp_path):

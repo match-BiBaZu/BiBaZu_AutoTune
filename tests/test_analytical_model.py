@@ -26,6 +26,7 @@ from bibazu_autotune.analytical_model import (
 )
 from bibazu_autotune.autotune import AutotunePipeline
 from bibazu_autotune.geometry import analyze_stl
+from bibazu_autotune.pressure_scaling import scale_pressure
 from bibazu_autotune.trial_context import manual_context
 
 
@@ -485,7 +486,9 @@ def test_full_mesh_and_pressure_limits(tmp_path):
     impact = AutomaticOffsetEstimator().estimate(body, Turn("y", 90), mount, mechanics, config)
     pressure = AnalyticalPressureModel().predict(body, mechanics, impact, 1, config)
     assert pressure.gauge_pa > 600000
-    assert len(pressure.warnings) == 3
+    assert len(pressure.warnings) == 2  # Reference/flow checks remain analytical.
+    scaled = scale_pressure(pressure.gauge_pa, config.pressure_scale_a, config.pressure_scale_b_pa)
+    assert "SPS-Druckgrenzen" in scaled.warnings[0]
     expected_critical = config.ambient_pa * ((1.2) ** 3.5 - 1)
     assert pressure.critical_gauge_pa == pytest.approx(expected_critical)
     with pytest.raises(ValueError, match="positiv"):

@@ -29,7 +29,15 @@ from PyQt6.QtWidgets import (
 
 from .clients import PressureClient
 from .pressure_service import add_plc_arguments, start_bundled
-from .pressure_test import SCALING
+from .pressure_test import (
+    COMBINATION_SETTLE_MS,
+    INTER_PULSE_PAUSE_MS,
+    PRESSURES_MBAR,
+    PULSE_DURATIONS_MS,
+    REPETITIONS,
+    SCALING,
+    pressure_matrix,
+)
 
 
 class PressureTestWorker(QThread):
@@ -196,15 +204,22 @@ class PressureTestWindow(QMainWindow):
         self.abort_worker = None
         self.result_directory = None
         self.results = []
+        self.total = len(pressure_matrix())
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
         layout.addWidget(
             QLabel("Array 2 · Düse 1 · Kanal 2 · OpenValve5 · Band bleibt ausgeschaltet")
         )
-        layout.addWidget(
-            QLabel("20 / 50 / 100 ms × 1000–6000 mbar × 5 Wiederholungen = 90 Stöße · Pause 3 s")
+        matrix_hint = QLabel(
+            f"{' / '.join(map(str, PULSE_DURATIONS_MS))} ms × "
+            f"{PRESSURES_MBAR[0]}–{PRESSURES_MBAR[-1]} mbar × "
+            f"{REPETITIONS} Wiederholungen = {self.total} Stöße · "
+            f"Stoßpause {INTER_PULSE_PAUSE_MS / 1000:g} s · "
+            f"Einschwingen je neuer Kombination {COMBINATION_SETTLE_MS / 1000:g} s"
         )
+        matrix_hint.setWordWrap(True)
+        layout.addWidget(matrix_hint)
         hint = QLabel(SCALING + " · Aufzeichnung über ADS-Serverzeitstempel, 1 ms.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -222,7 +237,7 @@ class PressureTestWindow(QMainWindow):
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.progress = QProgressBar()
-        self.progress.setRange(0, 90)
+        self.progress.setRange(0, self.total)
         layout.addWidget(self.progress)
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -265,7 +280,7 @@ class PressureTestWindow(QMainWindow):
         self.progress.setValue(0)
         self.start_button.setEnabled(False)
         self.abort_button.setEnabled(True)
-        self.status.setText("Testreihe startet; 90 Luftstöße …")
+        self.status.setText(f"Testreihe startet; {self.total} Luftstöße …")
         self.worker.submit("start")
 
     def abort_test(self):
@@ -286,7 +301,9 @@ class PressureTestWindow(QMainWindow):
         if name == "connected":
             self.connected = True
             self.start_button.setEnabled(not self.closing)
-            self.status.setText("SPS bereit. Start führt die festgelegten 90 Luftstöße aus.")
+            self.status.setText(
+                f"SPS bereit. Start führt die festgelegten {self.total} Luftstöße aus."
+            )
             if self.auto_run and not self.closing:
                 self.auto_run = False
                 self.start_test()
@@ -303,9 +320,11 @@ class PressureTestWindow(QMainWindow):
             self.start_button.setEnabled(self.connected and not self.busy and not self.closing)
             self.abort_button.setEnabled(self.busy and not self.worker.cancel.is_set())
             self.progress.setValue(value["completed"])
+            total = value.get("total", self.total)
+            self.progress.setMaximum(total)
             current = value.get("current", {})
             self.status.setText(
-                f"{value['status']} · {value['phase']} · {value['completed']}/90 · "
+                f"{value['status']} · {value['phase']} · {value['completed']}/{total} · "
                 f"{current.get('pulse_ms')} ms / {current.get('pressure_mbar')} mbar / "
                 f"Wiederholung {current.get('repetition')}"
                 + (" · " + value["error"] if value.get("error") else "")

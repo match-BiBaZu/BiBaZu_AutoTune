@@ -8,6 +8,8 @@ from collections import deque
 
 import pyads
 
+from .pressure_test import TIMED_PULSE_FEATURE_VERSION
+
 INFO = {
     "feature_version": "ProbeCalibrationTimedPulseVersion",
     "active": "ProbeCalibrationActive",
@@ -56,12 +58,16 @@ class PressurePulsePlc:
             raise RuntimeError(
                 "SPS-Kurzimpuls-Erweiterung fehlt oder ist nicht lesbar: " + str(exc)
             ) from exc
-        if version["MAIN.ProbeCalibrationTimedPulseVersion"] != 1:
-            raise RuntimeError("SPS-Kurzimpuls-Erweiterung Version 1 erforderlich.")
-        info = self.info()
-        if info["feature_version"] != 1:
+        if version["MAIN.ProbeCalibrationTimedPulseVersion"] != TIMED_PULSE_FEATURE_VERSION:
             raise RuntimeError(
-                "SPS-Kurzimpuls-Erweiterung fehlt (ProbeCalibrationTimedPulseVersion=1)."
+                f"SPS-Kurzimpuls-Erweiterung Version {TIMED_PULSE_FEATURE_VERSION} erforderlich "
+                "(20–100 ms in 10-ms-Schritten)."
+            )
+        info = self.info()
+        if info["feature_version"] != TIMED_PULSE_FEATURE_VERSION:
+            raise RuntimeError(
+                "SPS-Kurzimpuls-Erweiterung fehlt "
+                f"(ProbeCalibrationTimedPulseVersion={TIMED_PULSE_FEATURE_VERSION})."
             )
         if info["active"]:
             raise RuntimeError("Eine Sondenkalibrierung ist bereits aktiv.")

@@ -12,6 +12,7 @@ from bibazu_autotune.analytical_model import (
     Turn,
 )
 from bibazu_autotune.candidate_transfer import candidate_parameters
+from bibazu_autotune.pressure_scaling import SpsPressurePrediction
 
 
 def candidate(pressure=1234.5, offset=12.25, array=2, nozzle=1, status="ready"):
@@ -34,6 +35,7 @@ def candidate(pressure=1234.5, offset=12.25, array=2, nozzle=1, status="ready"):
             active_nozzles=(nozzle,),
         ),
         pressure=PressurePrediction(1, 101300 + pressure * 100, pressure * 100, 90000, ()),
+        sps_pressure=SpsPressurePrediction(pressure * 100, 1, 0),
     )
 
 
@@ -96,6 +98,7 @@ def test_sps_bounds_inclusive_and_model_warnings_allowed(pressure, offset):
         candidate(status="blocked"),
         candidate(status="pending"),
         replace(candidate(), pressure=None),
+        replace(candidate(), sps_pressure=None),
         replace(candidate(), impact=None),
         candidate(array=0),
         candidate(nozzle=2),

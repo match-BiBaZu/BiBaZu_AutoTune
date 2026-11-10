@@ -15,6 +15,13 @@ from pathlib import Path
 FILETIME_MS = 10_000
 SIGNALS = ("raw1", "raw2", "bar1", "bar2", "valve")
 SCALING = "SPS: Rohwert * 10 / 32767 bar; Sensortyp/Skalierung noch nicht bestätigt"
+PULSE_DURATIONS_MS = tuple(range(20, 101, 10))
+PRESSURES_MBAR = tuple(range(1000, 6001, 1000))
+REPETITIONS = 5
+INTER_PULSE_PAUSE_MS = 3000
+PRESSURE_SETTLE_MS = 1000
+COMBINATION_SETTLE_MS = 5000
+TIMED_PULSE_FEATURE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -28,9 +35,9 @@ class PressurePulse:
 def pressure_matrix() -> tuple[PressurePulse, ...]:
     combinations = (
         (duration, pressure, repeat)
-        for duration in (20, 50, 100)
-        for pressure in range(1000, 6001, 1000)
-        for repeat in range(1, 6)
+        for duration in PULSE_DURATIONS_MS
+        for pressure in PRESSURES_MBAR
+        for repeat in range(1, REPETITIONS + 1)
     )
     return tuple(PressurePulse(i, *values) for i, values in enumerate(combinations, 1))
 
@@ -131,12 +138,13 @@ class PressureRecording:
             "notification_cycle_ms": 1,
             "pre_ms": 100,
             "post_ms": 200,
-            "pause_ms": 3000,
-            "settle_ms": 1000,
+            "pause_ms": INTER_PULSE_PAUSE_MS,
+            "settle_ms": PRESSURE_SETTLE_MS,
+            "combination_settle_ms": COMBINATION_SETTLE_MS,
             "scaling": SCALING,
             "sampling_note": "ADS-Serverzeitstempel; Sensor-/EL3068-Auflösung separat begrenzt.",
             "probe_interface_version": 2,
-            "timed_pulse_feature_version": 1,
+            "timed_pulse_feature_version": TIMED_PULSE_FEATURE_VERSION,
             "signal_map": {
                 "raw1": "MAIN.RawNozzlePressure",
                 "raw2": "MAIN.RawNozzlePressure2",
@@ -171,8 +179,8 @@ class PressureRecording:
         self.persist()
         atomic_text(self.path / "summary.csv", csv_text(list(result), self.results))
         grouped = []
-        for duration in (20, 50, 100):
-            for pressure in range(1000, 6001, 1000):
+        for duration in PULSE_DURATIONS_MS:
+            for pressure in PRESSURES_MBAR:
                 valid = [
                     r
                     for r in self.results

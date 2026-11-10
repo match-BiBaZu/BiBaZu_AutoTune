@@ -80,6 +80,7 @@ class PreparationResult:
     pulse: StageResult[dict[int, int]]
     offset: StageResult[dict[CandidateKey, float]]
     pressure: StageResult[dict[CandidateKey, float]]
+    sps_pressure: StageResult[dict[CandidateKey, float]]
     ml: StageResult[dict[CandidateKey, float]]
     candidates: tuple[CandidateResult, ...] = ()
 
@@ -165,11 +166,27 @@ class AutotunePipeline:
             if pressures
             else "Analytisches Druckmodell: Voraussetzungen prüfen oder Berechnung starten.",
         )
+        scaled = {
+            c.key: c.sps_pressure.gauge_pa / 100 for c in candidates if c.sps_pressure is not None
+        }
+        sps_pressure = StageResult(
+            "ready" if scaled else "blocked",
+            scaled or None,
+            "SPS-Druckskalierung: berechnet"
+            if scaled
+            else "SPS-Druckskalierung: analytisches Ergebnis und gültige "
+            "Koeffizienten erforderlich.",
+        )
         ml = StageResult(
             "not_implemented",
             message="ML-Korrektur noch nicht implementiert; wartet auf analytische Werte.",
         )
-        if not missing and any(c.status == "ready" for c in candidates):
+        analytical_ready = {
+            c.key: c.pressure.gauge_pa / 100
+            for c in candidates
+            if c.pressure is not None and not c.pressure.warnings
+        }
+        if not missing and analytical_ready:
             request = AutotuneInput(
                 analysis.geometry,
                 analysis.material,
@@ -189,8 +206,7 @@ class AutotunePipeline:
                 parameters["conveyor_speed_mm_per_sec"],
             )
             pulse = self.pulse.estimate(request)
-            ml = self.ml.refine(
-                request,
-                {c.key: c.pressure.gauge_pa / 100 for c in candidates if c.status == "ready"},
-            )
-        return PreparationResult(tuple(missing), pulse, offset, pressure, ml, candidates)
+            ml = self.ml.refine(request, analytical_ready)
+        return PreparationResult(
+            tuple(missing), pulse, offset, pressure, sps_pressure, ml, candidates
+        )

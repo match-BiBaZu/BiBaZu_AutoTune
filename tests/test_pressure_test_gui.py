@@ -18,7 +18,7 @@ class GuiPressureApi:
             "phase": "idle",
             "active": False,
             "completed": 0,
-            "total": 90,
+            "total": 270,
             "current": {},
             "results": [],
             "last_rows": [],
@@ -104,10 +104,12 @@ def test_no_shot_on_open_or_connect_and_abort_is_responsive(pressure_window):
     window, api, wait = pressure_window
     QTest.qWait(150)
     assert not api.calls
+    assert window.progress.maximum() == 270
     assert not window.start_button.isEnabled()
     window.connect_button.click()
     wait(lambda: window.start_button.isEnabled())
     assert "start" not in api.calls
+    assert "270" in window.status.text()
     window.start_button.click()
     wait(lambda: api.state["active"])
     assert window.abort_button.isEnabled()

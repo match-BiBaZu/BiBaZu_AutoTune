@@ -110,6 +110,12 @@ def test_calculation_does_not_write_but_imported_result_is_live(offline_window, 
     assert window.import_button.isEnabled()
     window.import_button.click()
     expected = window.editor.parameters()
+    selected = window.autotune_results.selected_candidate()
+    assert selected.sps_pressure is not None
+    assert expected["arrays"][selected.mount.array_index - 1]["pressure_mbar"] == round(
+        selected.sps_pressure.gauge_pa / 100
+    )
+    assert selected.sps_pressure.gauge_pa != selected.pressure.gauge_pa
     wait_applied(window, services, wait, expected)
     assert writes(services)[-1] == expected
     assert len(writes(services)) == count + 1

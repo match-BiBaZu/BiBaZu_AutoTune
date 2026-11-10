@@ -156,7 +156,7 @@ class AutotuneSettingsPage(QWidget):
         layout.addWidget(self.details)
         self.geometry_panel = GeometryPanel()
         self.pages.addTab(self.geometry_panel, "Geometrie prüfen")
-        self.pages.addTab(self.model_panel, "Modell und Montage")
+        self.pages.addTab(self.model_panel, "Modell und Anlage")
         self.geometry_worker = GeometryWorker(self)
         self.geometry_worker.completed.connect(self.accept_analysis)
         self.model_worker = ModelWorker(self.pipeline, self)
@@ -434,6 +434,7 @@ class AutotuneSettingsPage(QWidget):
             f"Impulsdauer je Array [ms]: {result.pulse.value}",
             result.offset.message,
             result.pressure.message,
+            result.sps_pressure.message,
             result.ml.message,
         ]
         if result.missing:
@@ -448,8 +449,10 @@ class AutotuneSettingsPage(QWidget):
             self.status_changed.emit("Fehlende Voraussetzungen: " + "; ".join(result.missing))
         elif self.model_result is not None:
             count = sum(c.pressure is not None for c in result.candidates)
+            scaled_count = sum(c.sps_pressure is not None for c in result.candidates)
             self.status_changed.emit(
-                f"Berechnung abgeschlossen · {count} Druckvorschläge. "
+                f"Berechnung abgeschlossen · {count} analytische Ergebnisse, "
+                f"{scaled_count} SPS-Druckvorschläge. "
                 "Kandidat zur Übernahme auswählen."
             )
         elif any(c.status == "pending" for c in result.candidates):

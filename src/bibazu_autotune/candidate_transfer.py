@@ -11,13 +11,14 @@ def check_candidate(candidate: CandidateResult):
     if (
         candidate.status not in {"ready", "outside_model"}
         or candidate.pressure is None
+        or candidate.sps_pressure is None
         or candidate.impact is None
     ):
         raise ValueError("Der ausgewählte Kandidat besitzt kein übernehmbares Ergebnis.")
-    pressure = candidate.pressure.gauge_pa / 100
+    pressure_pa = candidate.sps_pressure.gauge_pa
     offset = candidate.impact.offset_m * 1000
-    if not math.isfinite(pressure) or not 0 <= pressure <= 6000:
-        raise ValueError("Berechneter Druck liegt außerhalb der SPS-Grenzen 0–6000 mbar.")
+    if not math.isfinite(pressure_pa) or not 0 <= pressure_pa <= 600000:
+        raise ValueError("Skalierter SPS-Druck liegt außerhalb der SPS-Grenzen 0–6000 mbar.")
     if not math.isfinite(offset) or not 0 <= offset <= 5000:
         raise ValueError("Berechneter Offset liegt außerhalb der SPS-Grenzen 0–5000 mm.")
     if candidate.mount.array_index not in range(1, 5) or candidate.mount.nozzle_index not in (1, 4):
@@ -42,7 +43,7 @@ def candidate_parameters(parameters: dict, candidate: CandidateResult) -> dict:
     if array["pulse_duration_ms"] != candidate.pulse_ms:
         raise ValueError("Impulsdauer wurde geändert; Berechnung erneut durchführen.")
     array["pressure_mbar"] = int(
-        (Decimal(str(candidate.pressure.gauge_pa)) / 100).quantize(
+        (Decimal(str(candidate.sps_pressure.gauge_pa)) / 100).quantize(
             Decimal("1"), rounding=ROUND_HALF_UP
         )
     )

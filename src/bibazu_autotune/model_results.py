@@ -120,7 +120,7 @@ class CalculationResultsWidget(QWidget):
         super().__init__(parent)
         self.results = ()
         layout = QVBoxLayout(self)
-        self.table = QTableWidget(0, 9)
+        self.table = QTableWidget(0, 10)
         self.table.setHorizontalHeaderLabels(
             [
                 "Array / aktive Düsen",
@@ -128,8 +128,9 @@ class CalculationResultsWidget(QWidget):
                 "Puls [ms]",
                 "Treffergewicht Σw",
                 "Offset [mm]",
-                "Überdruck [mbar]",
-                "Absolut [bar]",
+                "Analytischer Überdruck [mbar]",
+                "SPS-Sollwert [mbar]",
+                "Analytisch absolut [bar]",
                 "Kraft [N]",
                 "Status",
             ]
@@ -168,6 +169,7 @@ class CalculationResultsWidget(QWidget):
                 f"{sum(c.impact.weights):g}" if c.impact else "—",
                 f"{c.impact.offset_m * 1000:.4f}" if c.impact else "—",
                 f"{c.pressure.gauge_pa / 100:.4g}" if c.pressure else "—",
+                f"{c.sps_pressure.gauge_pa / 100:.6g}" if c.sps_pressure else "—",
                 f"{c.pressure.absolute_pa / 100000:.5g}" if c.pressure else "—",
                 f"{c.pressure.force_n:.6g}" if c.pressure else "—",
                 c.message,
@@ -270,6 +272,16 @@ class CalculationResultsWidget(QWidget):
                 f"p₀ absolut [Pa]: {p.absolute_pa:.8g}; p_g Überdruck [Pa]: {p.gauge_pa:.8g}",
                 "Grenze nicht abgeschnürter Strömung [mbar Überdruck]: "
                 f"{p.critical_gauge_pa / 100:.6g}",
+            ]
+        if c.pressure and c.sps_pressure:
+            sps = c.sps_pressure
+            lines += [
+                f"Analytischer Überdruck [mbar]: {c.pressure.gauge_pa / 100:.10g}",
+                f"SPS-Sollwert [mbar]: {sps.gauge_pa / 100:.10g}",
+                "SPS-Druckskalierung (Drücke in mbar): "
+                f"({c.pressure.gauge_pa / 100:.10g} − ({sps.scale_b_pa / 100:.10g})) "
+                f"/ {sps.scale_a:.12g} = {sps.gauge_pa / 100:.10g}",
+                sps.source,
             ]
         self.details.setPlainText("\n".join(lines))
         self.selection_changed.emit()
