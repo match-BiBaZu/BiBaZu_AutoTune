@@ -245,6 +245,11 @@ def resolve_turn(context: dict, config: ModelConfiguration) -> Turn:
         raise ValueError("Mehrstufige Bewegungsfolgen werden noch nicht analytisch berechnet.")
     if context.get("transition_kind") == "passive":
         raise ValueError("Passiver Übergang benötigt keinen aktiven Druckvorschlag.")
+    if context.get("kind") == "manual" and "rotation_axis" in context:
+        from .trial_context import validate_context
+
+        manual = validate_context(context)
+        return Turn(manual["rotation_axis"], manual["signed_angle_deg"])
     if context.get("kind") == "manual" and config.manual_axis is not None:
         source = normalize_quaternion(context.get("source_quaternion_xyzw"))
         target = normalize_quaternion(context.get("target_quaternion_xyzw"))

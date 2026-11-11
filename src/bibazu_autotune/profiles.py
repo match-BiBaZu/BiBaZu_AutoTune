@@ -51,7 +51,7 @@ def profile_parameters(profile):
     )
 
 
-def make_profile(parameters, context, machine_metadata=None, template=None, conveyor=None):
+def make_profile(parameters, context=None, machine_metadata=None, template=None, conveyor=None):
     parameters = validate_parameters(parameters)
     profile = copy.deepcopy(template or {})
     profile.update(copy.deepcopy(machine_metadata or {}))
@@ -63,9 +63,13 @@ def make_profile(parameters, context, machine_metadata=None, template=None, conv
         {
             "version": 13,
             "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-            "title": context.get("title")
-            or f"Transition {context['source_pose_id']}-{context['target_pose_id']}",
-            **context_fields(context),
+            "title": (
+                context.get("title")
+                or f"Transition {context['source_pose_id']}-{context['target_pose_id']}"
+                if context is not None
+                else profile.get("title") or "Parametersatz"
+            ),
+            **(context_fields(context) if context is not None else {}),
             "conveyor_enabled": bool((conveyor or {}).get("enabled", False)),
             "conveyor_reverse": bool((conveyor or {}).get("reverse", False)),
             **parameters,

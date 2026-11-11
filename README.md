@@ -1,16 +1,17 @@
 # BiBaZu AutoTune
 
-Eigenständige Desktop-Anwendung für STL-Geometrieauswertung, Autotune-Vorbereitung
-und manuell freigegebene Impulsparameter-Testreihen.
-Roadmap-Auswahl, Pose-Vorschau, Parameterbearbeitung, Bandbedienung, Versuchslogik,
-Winkelverlauf und Profildateien liegen in diesem Repository. Die Pressure-GUI und
-das Pressure-Repository werden zum Installieren und Ausführen nicht benötigt.
-Die Kamera-Anwendung stellt weiterhin ihre Aufnahme- und Messdaten-API bereit.
+Desktop-Anwendung zum Berechnen und Übernehmen von Parametervorschlägen für
+einzelne Kippbewegungen. Bauteile kommen aus einer Roadmap oder einer manuell
+geladenen STL. Die Hauptseite zeigt Ausgangs-/Zielpose, Parametereditor und
+Berechnungsergebnisse; die Autotune-Einstellungen enthalten Geometrieprüfung
+und Modell-/Anlagenparameter.
 
-Versuche verwenden weiterhin manuell gewählte Varianten. Die Autotune-Vorbereitung
-berechnet analytische Offset-/Druckvorschläge für einzelne Kippbewegungen.
-Ein ausgewählter Vorschlag kann ausdrücklich in den lokalen Parametereditor übernommen werden.
-Der Versuchserfolg wird nicht automatisch bewertet.
+Die Anwendung arbeitet für Auswahl und Berechnung vollständig offline.
+SPS-Verbindung, Live-Parameterübertragung und manuelle Bandbedienung sind optional.
+Kamera, Variantenreihen und Versuchsdurchführung gehören nicht mehr zur normalen
+Oberfläche. Ein separates Programm zur experimentellen Datenerfassung und zum
+ML-Training wird später entwickelt und ist hier noch nicht begonnen.
+Bestehende Versuchsbausteine und aufgezeichnete Daten bleiben erhalten.
 
 ## Forschungshintergrund
 
@@ -38,7 +39,6 @@ Die SPS-Verbindung ist konfigurierbar:
 
 ```powershell
 ./Start.ps1 --plc-ip 192.168.10.23 --ams-net-id 10.145.4.14.1.1 --ads-port 851
-./Start.ps1 --vision-url http://127.0.0.1:8766 --output-dir D:\AutoTuneRuns
 ```
 
 Die angegebenen PLC-Werte sind die Vorgaben der bestehenden Anlage. Eine passende
@@ -48,43 +48,34 @@ in ihren bisherigen Werkzeugen. AutoTune liest deren Werte nur als Metadaten.
 
 ## Manuelle Array- und Bandsteuerung
 
-Eine Roadmap und die Kamera-Anwendung sind für die manuelle Bedienung optional.
-Ohne ausgewählte Transition erinnert **Keine Roadmap geladen** im Fenster daran.
+Für die manuelle SPS-Bedienung ist keine Bauteilauswahl erforderlich.
 
-1. **SPS verbinden** wählen.
+1. **SPS verbinden** wählen. Ohne lokale Änderungen werden nur die aktuellen
+   SPS-Werte gelesen; es werden weder Standardwerte geschrieben noch das Band gestartet.
 2. Array-Aktivierung, Düsen, Impulsparameter und Bandgeschwindigkeit einstellen.
-3. Änderungen werden nach **250 ms Eingabepause automatisch** über die API auf
-   die SPS geschrieben und zurückgelesen. **SPS-Live** zeigt den aktuellen Status.
-   **Parameter übernehmen** kann die Übertragung zusätzlich sofort auslösen.
-4. **Band starten** und **Band stoppen** manuell bedienen. Das Band verwendet
-   die zuletzt bestätigten SPS-Werte. Solange Änderungen noch nicht bestätigt
-   sind, bleibt ein neuer Bandstart gesperrt.
+3. Gültige Änderungen werden nach **250 ms Eingabepause** automatisch geschrieben
+   und zurückgelesen. **Parameter übernehmen** löst die Übertragung sofort aus.
+4. **Band starten** und **Band stoppen** ausdrücklich bedienen. Ein neuer Bandstart
+   wartet auf bestätigte Parameterwerte. Während normaler Bandfahrt bleibt der
+   Editor bedienbar.
 
-Das Schreiben von Parametern startet weder das Band noch eine Kameraaufnahme.
-**Auch während der normalen Bandfahrt werden Änderungen live übertragen**;
-Array-Aktivierung, Düsen, Druck, Puls, Verzögerung, Offset und Bandsollwert können
-im Editor angepasst werden. Dabei werden keine Bandstart-, Bandstopp- oder
-Richtungsbefehle gesendet. Kalibrierung und Messmodi müssen weiterhin beendet sein.
-Während eines freigegebenen Versuchs bleibt der Editor automatisch gesperrt,
-damit die protokollierten Versuchsparameter unverändert bleiben. Während einer Schreiboperation
-bleibt der Editor bedienbar; neuere Eingaben werden anschließend als vollständiger
-Parametersatz übertragen und durch älteres Rücklesen nicht überschrieben.
-Ungültige Eingaben werden im Live-Status gemeldet und nicht geschrieben.
-Bei Verbindungs- oder Rücklesefehlern gibt es keine automatische Wiederholung.
-Ohne Verbindung bleiben Änderungen lokal; beim anschließenden Verbinden werden
-die ausgewählten lokalen Werte mit der SPS abgeglichen und bei Abweichung übertragen.
-Ohne lokale Änderungen liest der Verbindungsaufbau nur die SPS-Ausgangswerte.
-Profil- und Variantenwechsel sowie die Übernahme eines berechneten Kandidaten
-verwenden denselben Live-Ablauf. Diese Bedienung erzeugt keine Versuchsdateien.
+Berechnen und Bauteil-/Poseauswahl schreiben keine SPS-Werte. Erst die ausdrückliche
+Kandidatenübernahme ändert den Editor und löst bei verbundener SPS dessen Live-Übertragung aus.
+Dasselbe gilt für Änderungen im Editor und das Laden eines Parametersatzes.
+Neuere Eingaben während einer Schreiboperation bleiben erhalten; älteres Rücklesen
+überschreibt sie nicht. Ungültige Eingaben werden gemeldet und nicht übertragen.
+Bei Verbindungs- oder Rücklesefehlern erfolgt keine automatische Wiederholung.
 
-**Parameter sperren** sperrt den Editor, Varianten- und Profilwechsel sowie
-Parameterübernahmen und die Versuchsfreigabe. Bandstart und Bandstopp bleiben bedienbar.
-Noch nicht gesendete Änderungen warten bis **Parameter entsperren**; ein bereits
-laufender Schreibauftrag wird abgeschlossen. Die Sperre bleibt innerhalb der Sitzung
-auch nach einem Verbindungswechsel aktiv und wird nicht in Profilen gespeichert.
-Berechnungen und die Ergebnisansicht bleiben verfügbar; zur Übernahme eines Kandidaten
-zuerst entsperren. Für Kamera-Testreihen eine Transition auswählen oder manuelle Posen
-bestätigen und den folgenden Ablauf verwenden.
+Ohne Verbindung bleiben Änderungen lokal und werden beim späteren Verbinden
+abgeglichen. **Parameter sperren** sperrt Editor, Parameterdatei-Laden und
+Ergebnisübernahme. Noch nicht gesendete Änderungen warten auf das Entsperren;
+ein laufender Schreibauftrag wird abgeschlossen. Bandbedienung, Berechnung und
+Ergebnisansicht bleiben verfügbar. Die Sperre bleibt über Verbindungswechsel
+innerhalb derselben Sitzung erhalten.
+
+Die SPS-Verbindung benötigt keine Kamera-API. Verbinden, Bauteilauswahl und
+Berechnung legen keine experimentellen Run-Dateien an. Sitzungsende fordert
+über den vorhandenen SPS-Dienst einen Bandstopp an.
 
 ## Separater Drucktest
 
@@ -142,105 +133,81 @@ Nur für ausdrücklich angeforderte automatische Ausführung steht
 `./Start-Drucktest.ps1 --auto-run` zur Verfügung; dieser Aufruf verbindet und startet
 die Reihe im sichtbaren Fenster. Der normale Aufruf wartet auf den Startbutton.
 
-## Autotune-Einstellungen und Berechnung
+## Bauteilauswahl und Berechnung
 
-Das Hauptfenster besitzt die Reiter **Hauptseite** und **Autotune-Einstellungen**.
-Einstellungen und Berechnung funktionieren auch ohne SPS- oder Kameraverbindung.
-Eine auf der Hauptseite ausgewählte Roadmap liefert ihre STL-Datei
-und Ausgangs-/Zielpose. Über **STL auswählen / ersetzen** lassen sich fehlende
-Dateien ersetzen oder neue Bauteile ohne Roadmap laden. Beim Roadmap-/Bauteilwechsel
-wird die bisherige Mesh-Zuordnung verworfen.
-
-1. STL-Koordinateneinheit wählen: standardmäßig **mm**, alternativ **cm** oder **m**.
-   ASCII- und Binär-STL werden unterstützt; die Quelldatei bleibt unverändert.
-2. Unter **Autotune-Einstellungen → Modell und Anlage → Material und Kippen** ist die Materialdichte
-   zunächst mit **1200 kg/m³** vorbelegt. Für ein anderes Material dort anpassen;
-   Masse und physikalische Trägheit werden neu berechnet. Die Dichte bleibt beim
-   Bauteilwechsel erhalten. Die Berechnung setzt eine homogene Massenverteilung
-   voraus und bildet beispielsweise unbekannte Materialfüllungen nicht aus der STL ab.
-3. Unter **Autotune-Einstellungen → Geometrie prüfen** Abmessungen im STL-Koordinatensystem,
-   Oberfläche, Volumen, Volumenschwerpunkt
-   und geometrischen Trägheitstensor prüfen. Die Tensoren beziehen sich auf den
-   Schwerpunkt und die STL-Achsen. Intern gelten SI-Einheiten: m, m², m³, m⁵
-   für den geometrischen Tensor und kg·m² für den physikalischen Tensor.
-   Abmessungen, Oberfläche, Volumen und Masse werden in mm, mm²,
-   mm³ beziehungsweise g angezeigt; eine zweite Spalte zeigt die SI-Werte zum Vergleich.
-   Geometrischer und physikalischer Trägheitstensor stehen jeweils als X/Y/Z-Matrix
-   mit Einheiten daneben. Dateipfad, STL-Inhaltshash, Importeinheit und Dreieckzahl
-   kennzeichnen die Quelle. **Geometriewerte kopieren** kopiert den Bericht mit
-   Einheiten zum Abgleich etwa mit CAD-Werten in die Zwischenablage.
-   Die Ansicht aktualisiert sich nach dem Import und bei Änderungen an Einheit oder Dichte.
-   Während einer neuen Auswertung werden alte Werte ausgeblendet; nicht verfügbare
-   Volumen- oder Materialdaten bleiben ausdrücklich gekennzeichnet.
-4. Für neue Bauteile **Manuelle Ausgangs- und Zielpose verwenden** aktivieren,
-   einen Bauteilnamen und beide Quaternionen als **x, y, z, w** eingeben.
-   Vier durch Leerzeichen oder Kommas getrennte Zahlen mit Dezimalpunkt verwenden.
-   Die Quaternionen werden normalisiert und als Mesh-Vorschau angezeigt.
-   Erst **Manuelle Posen bestätigen** gibt den Übergang für Trainingsversuche frei.
-   Änderungen an den Posen oder ein neuer STL-Import heben die Bestätigung auf.
-5. Unter **Modell und Anlage** links den passenden Bereich auswählen:
+1. Auf der **Hauptseite** den Einstieg wählen:
+   - **Roadmap laden:** vorhandene Auswahl von Bauteil und Transition. Ausgangs-/Zielpose
+     und Drehkommando werden aus der Roadmap übernommen. Mehrstufige Bewegungsfolgen
+     bleiben analytisch nicht unterstützt und werden mit einem Grund angezeigt.
+   - **Aus STL laden:** eine STL wählen und den Dialog **Bauteil und Posen** öffnen.
+     Bauteilname ist mit dem Dateinamen vorbelegt, Importeinheit standardmäßig mm
+     (alternativ cm oder m).
+2. Bei manueller STL die Ausgangslage mit **±X/±Y/±Z** ausrichten. Der einstellbare
+   Drehschritt beträgt anfangs **90°**. **STL-Lage zurücksetzen** stellt die originale
+   STL-Orientierung her. Die Achsen beziehen sich auf die dargestellte Rinne.
+3. Das Kippziel über **Achse, Drehsinn +/− und Winkel in Grad** festlegen;
+   Vorgabe **Y, positiv, 90°**. Ein einzelner Winkel muss größer 0 und höchstens
+   360° sein. Die Zielpose entsteht durch diese Drehung aus der Ausgangspose.
+   Beide Vorschauen aktualisieren sich sofort; Auflage an Y=0 und Z=0 wird
+   automatisch dargestellt. Quaternionen werden nur intern verwendet.
+4. Mit **Bauteil übernehmen** bestätigen. Abbrechen erhält die bisherige Auswahl
+   samt Ergebnissen. **Bauteil und Posen bearbeiten** auf der Hauptseite öffnet den
+   Dialog erneut. **STL zuordnen / ersetzen** ordnet eine fehlende oder andere
+   Datei zu. Bei einer Roadmap bleiben dabei deren Posen und Transition erhalten.
+   Für einen geladenen manuellen Parametersatz ohne STL muss die zugeordnete Datei
+   den gespeicherten Inhaltshash besitzen; ein neues Bauteil über **Aus STL laden** wählen.
+5. Unter **Autotune-Einstellungen → Geometrie prüfen** Abmessungen, Fläche,
+   Volumen, Schwerpunkt, Masse und Trägheit mit CAD-Werten vergleichen. Die Tabellen
+   zeigen praktische Einheiten und SI-Werte; beide Tensoren stehen als X/Y/Z-Matrix
+   daneben. **Geometriewerte kopieren** kopiert den Bericht mit Einheiten.
+   Nicht verfügbare Werte sind gekennzeichnet, alte Ergebnisse werden beim
+   Neuimport ausgeblendet. STL-Auswertung und Modellberechnung laufen im Hintergrund.
+6. Unter **Modell und Anlage** die Bereiche prüfen:
 
    | Bereich | Einstellungen |
    | --- | --- |
-   | **Material und Kippen** | Dichte, Schwerkraft, Anlagenneigung, Kontakt-Toleranz und manuelle Kippachse/-winkel |
-   | **Düsen und Luftstrahl** | Öffnungszahl, Durchmesser, Teilung, Breiten, Düsenabstand und Strahlöffnungswinkel |
-   | **Treffer und Offset** | Grenzen für Treffergewichte, Randabstand und Offsetreserve |
+   | **Material und Kippen** | Dichte (Standard 1200 kg/m³), Schwerkraft, Neigung und Kontakt-Toleranz |
+   | **Düsen und Luftstrahl** | Öffnungen, Durchmesser, Teilung, Breiten, Abstand und Strahlöffnungswinkel |
+   | **Treffer und Offset** | Treffergewichte, Randabstand und Offsetreserve |
    | **Analytischer Druck** | Strömungsbeiwerte, Isentropenexponent und Umgebungsdruck |
-   | **SPS-Druckskalierung** | Koeffizienten a/b und Erklärung der Druckumrechnung |
-   | **Montage je Array/Düse** | Reihenmitten, Achsen und X-Versätze; Anzeige nach Array filterbar |
+   | **SPS-Druckskalierung** | Koeffizienten a/b für den SPS-Sollwert |
+   | **Montage je Array/Düse** | Reihenmitten, Achsen und X-Versätze, nach Array filterbar |
 
-   Jeder Bereich erklärt seine Aufgabe und gruppiert zusammengehörige Eingaben.
-   Ein Bereichswechsel erhält Eingaben und Ergebnisse. Die Impulsdauer bleibt
-   im Parametereditor auf der Hauptseite. Modell- und Montagestandards werden
-   weiterhin getrennt gespeichert; der Arrayfilter ändert nur die Anzeige.
-6. Auf der **Hauptseite** im manuellen Parametereditor die Impulsdauer je Array
-   vorgeben und im unteren Reiter **Autotune-Ergebnisse** **Berechnung durchführen** wählen.
-   Direkt daneben stehen **Ergebnisse in Ausgangswerte schreiben** und der Berechnungsstatus.
-   Arrays und Düsen müssen dafür
-   noch nicht aktiviert sein. Fehlende Voraussetzungen erscheinen über dem Editor;
-   während der Berechnung ist der Berechnungsbutton gesperrt.
-7. Unter **Autotune-Ergebnisse** einen Kandidaten auswählen. Tabelle, Trefferbild
-   und Details gehören zu diesem Kandidaten. **Kraft [N]** zeigt die berechnete
-   mittlere erforderliche Gesamtkraft der aktiven Düsen am Bauteil.
-   **Analytischer Überdruck [mbar]** bleibt das unveränderte Ergebnis des
-   physikalischen Modells; **SPS-Sollwert [mbar]** zeigt den separat skalierten Druck.
-   **Versuchsprotokoll** enthält separat
-   Kameraverlauf und Versuchsergebnisse; der manuelle Editor bleibt sichtbar.
-8. Für die Übernahme eine **Bandgeschwindigkeit größer als 0 mm/s** eintragen und
-   **Ergebnisse in Ausgangswerte schreiben** wählen. Die Aktion aktualisiert den
-   sichtbaren Parametersatz und die aktuell bearbeitete Variante. Ohne vorhandene
-   Variante wird **Ausgangswerte** angelegt und ausgewählt.
+   Bereichswechsel erhalten Eingaben und Ergebnisse. Modell- und Montagestandards
+   werden weiterhin getrennt gespeichert. Datei- und Poseauswahl befinden sich
+   ausschließlich auf der Hauptseite, nicht in den Einstellungen.
+7. Auf der Hauptseite **Impulsdauer je Array** im Parametereditor einstellen und
+   **Berechnung durchführen** wählen. Arrays und Düsen müssen dafür nicht aktiviert
+   sein; eine SPS-Verbindung ist nicht erforderlich. Fehlende Voraussetzungen werden angezeigt.
+8. Einen Kandidaten in den **Autotune-Ergebnissen** auswählen. Tabelle, Trefferbild
+   und Details zeigen analytischen Druck, skalierten SPS-Sollwert, erforderliche
+   Kraft und Offset. Bei positiver Bandgeschwindigkeit übernimmt
+   **Ergebnisse in Ausgangswerte schreiben** den skalierten Druck und Offset in den
+   aktuellen Parametersatz. Das Array wird aktiviert, genau die automatisch gewählten
+   Düsen eingeschaltet und **Offset mit Bandsollwert** aktiviert. Andere Arrays,
+   Impulsdauer, Verzögerung und Bandgeschwindigkeit bleiben erhalten.
 
-Übernommen werden der **skalierte SPS-Sollwert** und der Offset des ausgewählten Arrays.
-Fehlt eine gültige Skalierung, wird kein analytischer Ersatzwert übernommen. Dieses Array wird
-aktiviert, ausschließlich seine automatisch ausgewählten Düsen eingeschaltet und **Offset mit
-Bandsollwert** aktiviert. Andere Arrays sowie Impulsdauer, Verzögerung und
-Bandgeschwindigkeit bleiben erhalten. Die ungerundeten Werte müssen endlich und
-innerhalb **0–6000 mbar** sowie **0–5000 mm** liegen. Erst danach wird kaufmännisch
-auf ganze mbar und 0,1 mm gerundet; Fehler brechen die gesamte Übernahme ab.
-Referenzbereichs- und Strömungswarnungen verhindern eine Übernahme innerhalb der
-SPS-Grenzen nicht und bleiben in den Ergebnissen sichtbar.
+Die ungerundeten Übernahmewerte müssen endlich und innerhalb **0–6000 mbar** und
+**0–5000 mm** liegen. Erst danach wird kaufmännisch auf ganze mbar und 0,1 mm
+gerundet. Fehler brechen die gesamte Übernahme ab; fehlende Skalierung wird nicht
+durch den analytischen Druck ersetzt. Referenzbereichs- und Strömungswarnungen
+bleiben sichtbar und verhindern eine Übernahme innerhalb der SPS-Grenzen nicht.
 
-Die Berechnung allein schreibt keine SPS-Parameter. Die ausdrückliche Ergebnisübernahme
-ändert den entsperrten Editor und löst bei verbundener SPS die Live-Übertragung auch
-während der normalen Bandfahrt aus. Ohne Verbindung bleiben übernommene Varianten lokal; beim anschließenden
-Verbindungsaufbau werden sie übertragen. Während eines Versuchs sind
-Berechnung und Übernahme gesperrt. Reiterwechsel erhalten Eingaben und Ergebnisse;
-Änderungen an STL, Einheit, Dichte, Posen, Modell-/Montagewerten oder Impulsdauern
-verwerfen die bisherigen Ergebnisse. Anschließend ist neu zu berechnen.
+**Datei → Parametersatz laden/speichern** verwaltet genau einen Parametersatz im
+Pressure-Profilformat Version 13. Das Speichern schreibt keine SPS-Werte.
+Auch ältere Pressure-Profile ohne Bauteilkontext werden unterstützt; beim Laden
+bleibt eine bereits gewählte Roadmap oder STL erhalten. Ein Parametersatz kann
+auch ohne Bauteilauswahl gespeichert werden.
+Bauteilkontext und Posen werden als Metadaten gespeichert, STL-Datei, geometrische
+Auswertung und Modellparameter nicht eingebettet. Eine STL kann beim Laden erneut
+zugeordnet werden. Alte manuelle Posen ohne Drehkommando bleiben lesbar; bei einer
+mehrdeutigen Orientierung, insbesondere 180°, muss der Drehsinn im Pose-Dialog
+bestätigt werden. +180° und −180° bleiben danach getrennt gespeichert.
 
-Die STL-Auswertung läuft getrennt von der Netzwerkverarbeitung im Hintergrund.
-Überholte Importergebnisse werden verworfen. Offene oder inkonsistent orientierte
-Netze liefern verfügbare Oberflächendaten; Volumen, Volumenschwerpunkt und Trägheit
-bleiben ausdrücklich nicht verfügbar. Löcher und Orientierung werden nicht
-automatisch repariert.
-
-`AutotunePipeline` besitzt austauschbare Schnittstellen für Impulsdauerschätzung,
-Offsetberechnung, analytischen Druckvorschlag und ML-Korrektur. Die Impulsdauer
-stammt aus dem Editor; ihre automatische Schätzung und die ML-Korrektur bleiben
-Platzhalter. Die Berechnung selbst erzeugt keine Variante und schreibt keine Parameter
-auf die SPS. Geometrie- und Modellberechnungen laufen in eigenen Workern; geänderte
-Eingaben verwerfen überholte Ergebnisse.
+Geometrie, Importeinheit und Berechnungsergebnisse sind Sitzungsdaten. Modell- und
+Montagestandards werden nur mit ihren ausdrücklich beschrifteten Schaltflächen
+gespeichert. Die analytische Rechnung ist weiterhin eine Näherung; ML-Korrektur
+ist noch nicht implementiert.
 
 ### Analytischer First Guess
 
@@ -330,7 +297,7 @@ Steiner-Anteil. Die maximale potentielle Energie entlang der gewünschten Drehun
 liefert Δh. Eine fehlende geradlinige Kippkante, eine Durchdringung der Auflageflächen
 vor dem Kipppunkt oder ein vor dem Kipppunkt endender Drehwinkel sperren den Kandidaten.
 Mehrstufige Routen werden noch nicht berechnet. Bei mehrdeutigen manuellen Posen
-müssen Achse und vorzeichenbehafteter Winkel bestätigt werden; sie müssen zur Zielpose passen.
+werden Achse und Drehsinn im Dialog auf der Hauptseite bestätigt; sie müssen zur Zielpose passen.
 
 Jede Öffnung erhält ein Treffergewicht **0, 0,5 oder 1**, abhängig davon, welcher
 Anteil ihres Strahlquerschnitts von der projizierten Bauteilfläche überdeckt wird.
@@ -465,85 +432,51 @@ des Impulses sind nicht zusätzlich modelliert: Treffer und Hebelarm gelten am I
 Geometrieauswertung, Einheit und Ergebnisse bleiben in der Sitzung; allgemeine
 Modell- und Montagevorgaben können ausdrücklich als Startwerte gespeichert werden.
 Testreihen und Pressure-Profile erhalten dadurch keine zusätzlichen Modellfelder.
-Manuelle Pose-Kontexte werden für reproduzierbare Trainingsversuche
-mitprotokolliert: Bauteilname, STL-SHA-256 und normalisierte Ausgangs-/Zielorientierung.
-Ein anderes Bauteil, ein anderer STL-Inhalt oder andere Orientierungen beginnen
-einen neuen Run. Eine Neuberechnung der Roadmap findet nicht statt.
+Manuelle Pose-Kontexte speichern Bauteilname, STL-SHA-256, normalisierte Ausgangs-/
+Zielorientierung und das ausdrücklich gewählte Drehkommando im Parametersatz.
+Ein anderes Bauteil, ein anderer STL-Inhalt oder andere Orientierungen invalidieren
+die Berechnung; es wird dabei kein Versuchs-Run angelegt. Eine Neuberechnung
+der Roadmap findet nicht statt.
 
-## Eine Testreihe durchführen
+## Abgrenzung zur Versuchsaufzeichnung
 
-1. Kamera-Anwendung starten, Kamera oder Demo verbinden und ROI, Hintergrund,
-   Winkelreferenz sowie Aufnahmestart einstellen. Eine manuell scharfgeschaltete
-   Aufnahme zuerst entschärfen.
-2. AutoTune starten. **Roadmap auswählen** öffnet JSON-/YAML-Roadmaps mit
-   Ausgangs-/Zielposen und direkten oder gruppierten Übergängen. Alternativ ein
-   vorhandenes **Profil laden** oder eine **Testreihe laden**. Das ist bereits
-   ohne Verbindung möglich und schreibt keine Werte auf die SPS. Für ein neues
-   Bauteil alternativ STL und manuelle Posen wie oben vorbereiten und bestätigen.
-3. **SPS verbinden** wählen. AutoTune liest die tatsächlichen SPS-Ausgangswerte;
-   lokal ausgewählte Transitionen und geladene Varianten bleiben erhalten. Die
-   Kamera-API wird anschließend separat verbunden. Ist sie nicht erreichbar,
-   bleibt die SPS verbunden und die Kamera-Zeile zeigt den genauen Fehler.
-   Nach dem Start der Kamera-Anwendung **Kamera verbinden** wählen. Versuche
-   werden erst freigegeben, wenn auch die Kamera-API verbunden ist.
-4. Varianten kopieren und bearbeiten. Vier Arrays enthalten jeweils gemeinsame
-   Impulsparameter und sechs einzeln schaltbare Düsen. Bandgeschwindigkeit gilt
-   global. Ein Wechsel der Transition beginnt einen neuen Run und leert die
-   angezeigten Ergebnisse. Während eines Versuchs ist die Auswahl gesperrt.
-5. Band stoppen, Bauteil in Ausgangslage bringen und **Versuch freigeben** wählen.
-   Erst nach bestätigtem Schreiben und Rücklesen wird die Kamera scharfgeschaltet.
-6. **Band starten** in AutoTune wählen. Während der Versuch vorbereitet wird,
-   wartet der Bandstart auf die scharfe Kamera. Im Kamera-Modus **Manuell** zusätzlich die Aufnahme in AutoTune
-   auslösen. **Band stoppen** bleibt auch während eines Bandstarts verfügbar
-   und bricht dessen laufende Startsequenz ab.
-7. Nach dem Ergebnis das Band stoppen und das Bauteil zurücklegen. Jeder Versuch
-   benötigt eine neue Freigabe; es gibt keine automatische Versuchsfolge.
-8. Ein Ergebnis auswählen und **Ergebnis übernehmen und Profil speichern** wählen.
-   AutoTune öffnet seinen eigenen Dateidialog, übernimmt die Parameter nach dessen
-   Bestätigung, prüft das Rücklesen und speichert lokal. Abbrechen des Dialogs
-   schreibt weder Parameter noch eine Datei. Schlägt das Speichern nach der
-   Parameterübernahme fehl, meldet AutoTune diesen Unterschied ausdrücklich.
+Die normale AutoTune-Oberfläche berechnet Parameter und bedient bei Bedarf die SPS.
+Sie enthält keine Kamera-Verbindung, Versuchsfreigabe, Aufnahmebedienung,
+Variantenverwaltung oder Versuchsprotokollansicht.
 
-Ein Aufzeichnungsstatus `completed` mit Endgrund `part_left` bestätigt eine
-gespeicherte Durchfahrt, nicht das Erreichen der Zielpose. Die Kamera misst einen
-2D-Achswinkel modulo 180°; fehlende Messwerte bleiben in den Daten sichtbar.
+`Engine`, `Strategy`, `RecipeStrategy`, bestehende Kamera-Clients und deren
+Dateiformate bleiben als vorhandene Bausteine mit eigenen Tests erhalten.
+Frühere Aufzeichnungen unter `data/runs/` werden nicht verändert oder gelöscht.
+Ein neues Programm für experimentelle Datenerfassung und ML-Training wird
+hier noch nicht entwickelt. Der vorhandene separate Drucktest bleibt unverändert.
 
-Ein Versuchsabbruch beendet die Kameraaufnahme; das Band kann weiter manuell
-gestoppt werden. Sitzungsende, Sitzungsablauf oder Beenden des PLC-Dienstes lösen
-einen Bandstopp aus, soweit ADS erreichbar ist. Bei Verbindungsfehlern gibt es
-keinen automatischen Wiederanlauf; erneut **SPS verbinden** wählen. Ein Ausfall
-der Kamera-API im Leerlauf trennt die SPS-Sitzung nicht.
-
-## Roadmaps, Profile und Ergebnisse
+## Roadmaps und Parametersätze
 
 `BIBAZU_ROADMAPS_DIR` legt den Startordner des Roadmap-Dialogs fest. Ohne diese
-Variable beginnt er unter `Documents/BiBaZu_Roadmaps` im Benutzerverzeichnis;
-ein benachbartes Roadmap-Repository ist nicht erforderlich. Ein kleines Beispiel
-steht in [examples/roadmap.json](examples/roadmap.json). Vorhandene Roadmap-
-Dateien, Meshes, Vorschaubilder und Consumer-Sidecars können unverändert verwendet
-werden. Gespeicherte Transitionsmetadaten bleiben auch bei fehlender Roadmap erhalten.
+Variable beginnt er unter `Documents/BiBaZu_Roadmaps`; ein Nachbar-Repository ist
+nicht erforderlich. Ein Beispiel steht in [examples/roadmap.json](examples/roadmap.json).
+Vorhandene Roadmaps, Meshes, Vorschaubilder und Consumer-Sidecars bleiben nutzbar.
+Bei fehlender STL kann auf der Hauptseite eine Ersatzdatei zugeordnet werden.
 
-AutoTune lädt und speichert Pressure-Profile der Version 13. Exportierte Profile
-können weiterhin in Pressure Control geladen werden. Maschinenkalibrierung,
-Lichtschrankenwerte und Roboterwinkel werden nicht aus einem Profil auf Hardware
-übertragen. Bestehende Metadaten bleiben für die Dateikompatibilität erhalten;
-die Oberfläche zeigt keine Roboterangaben an.
+Das Dateimenü lädt und speichert Pressure-Profile **Version 13**. Diese bleiben
+in Pressure Control verwendbar. Bestehende Maschinenmetadaten werden erhalten,
+jedoch keine Roboterwinkel oder Kalibrierwerte aus einer Datei auf Hardware übertragen.
+Roadmaps verwenden `roadmap_transition`; manuelle Auswahl verwendet `trial_context`
+mit `kind: "manual"`, Bauteilname, STL-Inhaltshash und normalisierten Posen.
+Neue manuelle Kontexte speichern zusätzlich `rotation_axis` und `signed_angle_deg`;
+beide werden gemeinsam und gegen die Zielorientierung geprüft. Ein Parametersatz
+enthält höchstens einen Kontext. Quaternionen bleiben ein internes Speicherformat.
 
-Testreihen behalten `schema_version: 1` und `variants` mit je `name` und vollständigem
-`parameters`. Roadmap-Dateien verwenden weiterhin `roadmap_transition`; manuelle
-Trainingsübergänge verwenden stattdessen `trial_context` mit `kind: "manual"`.
-Genau ein Kontext ist erlaubt. Profile bleiben bei Version 13; Run-, Trial- und
-Kamera-Metadaten verwenden dieselbe Kontextunterscheidung. Bei bereits ausgewählter Transition
-wird die Zuordnung geprüft. Beispiel: [examples/testreihe.json](examples/testreihe.json).
+Dateien werden atomar ersetzt. Der Dateidialog beginnt unter `data/profiles/`
+oder im zuletzt gewählten Ordner. Beim Laden werden alle Parameter validiert,
+bevor die Auswahl und der Editor geändert werden. Bei bestehender SPS-Verbindung
+werden die geladenen Editorwerte über die reguläre Live-Synchronisierung übertragen.
 
-Ergebnisse liegen standardmäßig unter `data/runs/<run_id>/`:
-
-- `run.json`: Transition, tatsächliche Ausgangsparameter und Erstellungszeit.
-- `<trial_id>.json`: Parameter, Status, Kameraeinstellungen, Messreihe und Clip-Verweis.
-
-JSON-Dateien werden atomar ersetzt. Originalbilder bleiben im Aufnahmeordner der
-Kamera-Anwendung; AutoTune kopiert sie nicht. Der Profil-Dateidialog beginnt unter
-`data/profiles/` beziehungsweise im zuletzt gewählten Profilordner.
+Alte Testreihen (`schema_version: 1`, `variants`) bleiben über die vorhandenen
+Bibliotheksbausteine lesbar, sind aber nicht Teil des normalen Dateimenüs.
+Beispiel: [examples/testreihe.json](examples/testreihe.json). Auch die alten
+Run-/Trial-Dateien mit Parametern, Messreihen und Clip-Verweisen bleiben erhalten.
+Der normale Berechnungsablauf erzeugt keine solchen Dateien.
 
 ## PLC-API separat betreiben
 
@@ -559,8 +492,9 @@ Schließen der Oberfläche aktiv; die Freigabe der Sitzung fordert einen Bandsto
 an. Die alte API der Pressure-GUI wird für diesen Workflow nicht benötigt.
 
 Der Dienst bindet ausschließlich `127.0.0.1`. API-Dokumentation liegt auf seinem
-Port unter `/docs`, das Schema unter `/openapi.json`. Kamera-Vorgabe ist
-`http://127.0.0.1:8766`.
+Port unter `/docs`, das Schema unter `/openapi.json`. Der normale
+AutoTune-Start baut keine Kamera-Verbindung auf; ein alter `--vision-url`-Parameter
+wird für Startskript-Kompatibilität noch akzeptiert, aber nicht verwendet.
 
 - `GET /api/v1/health`, `/capabilities`, `/state`
 - `POST /api/v1/sessions`, `/sessions/heartbeat`; `DELETE /api/v1/sessions/current`
@@ -569,7 +503,7 @@ Port unter `/docs`, das Schema unter `/openapi.json`. Kamera-Vorgabe ist
 
 API-Version und Parameterformat bleiben bei Version 1. Sitzungen benötigen
 keine Roadmap-Transition. Schreibaufrufe erfordern `X-Session-Id`; Heartbeats
-erfolgen alle fünf Sekunden, die Sitzung verfällt nach 15 Sekunden. Operationen
+erfolgen in der Oberfläche alle 0,5 Sekunden, die Sitzung verfällt nach 15 Sekunden. Operationen
 laufen asynchron und prüfen ihre Sitzung erneut vor Schreibzugriffen. Ein
 Parameteraufruf startet das Band nicht. Transitionen und Dateidialoge gehören
 zur Oberfläche; es gibt keinen API-Endpunkt `profile/save-dialog`.

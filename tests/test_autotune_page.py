@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 from test_candidate_transfer import candidate
 from test_gui import offline_window as offline_window
-from test_model_gui import prepare
+from test_model_gui import prepare, select_manual
 
 from bibazu_autotune.analytical_model import PressurePrediction
 from bibazu_autotune.candidate_transfer import candidate_parameters
@@ -74,8 +74,6 @@ def test_main_page_calculation_selection_import_and_later_connect(offline_window
     assert window.autotune_results.preview.candidate is selected
     window.open_autotune_settings()
     window.pages.setCurrentWidget(window.main_page)
-    window.output_tabs.setCurrentIndex(1)
-    window.output_tabs.setCurrentIndex(0)
     assert window.autotune_settings.model_result is result
     assert window.autotune_results.selected_candidate() is selected
     window.editor.speed.setValue(80)
@@ -83,33 +81,31 @@ def test_main_page_calculation_selection_import_and_later_connect(offline_window
     expected = candidate_parameters(before, selected)
     window.import_button.click()
     assert window.editor.parameters() == expected
-    assert window.variants == [{"name": "Ausgangswerte", "parameters": expected}]
-    assert window.editing == 0 and window.variant_list.currentRow() == 0
+    assert not hasattr(window, "variants")
     assert not services.calls
     window.worker.submit("connect")
-    wait(lambda: window.state == "ready")
+    wait(
+        lambda: (
+            window.state == "ready"
+            and window.sent_parameters is None
+            and window.confirmed_parameters == expected
+        )
+    )
     assert window.editor.parameters() == expected
-    assert window.variants[0]["parameters"] == expected
-    assert not any(method == "PUT" for method, _, _ in services.calls)
+    assert sum(method == "PUT" for method, _, _ in services.calls) == 1
     assert not errors
 
 
-def test_current_variant_and_editor_changes_are_preserved(offline_window, tmp_path):
+def test_other_arrays_and_editor_changes_are_preserved(offline_window, tmp_path):
     window, services, errors, wait = offline_window
     result = calculate(window, wait, tmp_path)
     window.editor.speed.setValue(80)
-    window.add_variant()
-    window.add_variant()
-    untouched = copy.deepcopy(window.variants[0])
     window.editor.rows[1]["delay_ms"].setValue(91)
     window.editor.rows[2]["pressure_mbar"].setValue(987)
     before = window.editor.parameters()
     expected = candidate_parameters(before, result.candidates[0])
     window.import_button.click()
-    assert window.variants[0] == untouched
-    assert len(window.variants) == 2
-    assert window.editing == 1
-    assert window.variants[1]["parameters"] == expected == window.editor.parameters()
+    assert window.editor.parameters() == expected
     assert not services.calls and not errors
 
 
@@ -134,16 +130,15 @@ def test_import_failure_is_atomic(offline_window, tmp_path, reason):
     elif reason == "stale":
         window.editor.rows[1]["pulse_duration_ms"].setValue(300)
     before = copy.deepcopy(window.editor.parameters())
-    variants = copy.deepcopy(window.variants)
     window.import_autotune_result()
     assert "Übernahme nicht möglich" in window.autotune_status.text()
     if reason == "zero_speed":
         assert "Bandgeschwindigkeit größer als 0" in window.autotune_status.text()
-    assert window.editor.parameters() == before and window.variants == variants
+    assert window.editor.parameters() == before
     assert not services.calls and not errors
 
 
-def test_warning_candidate_and_selection_and_trial_lock(offline_window, tmp_path):
+def test_warning_candidate_and_selection_and_operation_lock(offline_window, tmp_path):
     window, services, errors, wait = offline_window
     result = calculate(window, wait, tmp_path)
     window.editor.speed.setValue(80)
@@ -159,7 +154,7 @@ def test_warning_candidate_and_selection_and_trial_lock(offline_window, tmp_path
     window.autotune_results.table.selectRow(0)
     before = window.editor.parameters()
     generation = window.autotune_settings.model_generation
-    window.handle_event("state", "waiting")
+    window.handle_event("state", "updating")
     assert not window.calculate_button.isEnabled()
     assert not window.import_button.isEnabled()
     assert not window.autotune_settings.isEnabled()
@@ -183,12 +178,11 @@ def test_settings_changes_invalidate_results(offline_window, tmp_path, change):
     if change == "density":
         settings.density.setText("1200")
     elif change == "unit":
-        settings.unit.setCurrentText("cm")
+        settings.set_unit("cm")
     elif change == "mesh":
         settings.set_mesh(tmp_path / "missing.stl")
     elif change == "pose":
-        settings.target.setText("0, 0, 0, 1")
-        settings.pose_edited()
+        select_manual(window, settings.analysis, "y", -90)
     elif change == "model":
         settings.model_panel.fields["drag_coefficient"][0].setValue(1.1)
     elif change == "mount":

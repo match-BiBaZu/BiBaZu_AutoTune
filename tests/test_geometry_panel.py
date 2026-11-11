@@ -80,7 +80,7 @@ def test_geometry_view_updates_density_and_unit_and_clears_pending_values(offlin
     assert not panel.copy_button.isEnabled()
     wait(lambda: settings.analysis is not None)
     assert values(panel)["Masse"][0] == "57.6"
-    settings.unit.setCurrentText("cm")
+    settings.set_unit("cm")
     assert panel.analysis is None
     wait(lambda: settings.analysis is not None)
     assert values(panel)["Abmessung X"][0] == "200"

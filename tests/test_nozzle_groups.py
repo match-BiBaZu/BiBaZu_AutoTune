@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 from test_analytical_model import pose
 from test_engine import parameters
 from test_gui import offline_window as offline_window
+from test_model_gui import select_manual
 
 from bibazu_autotune.analytical_model import (
     AnalyticalModel,
@@ -275,8 +276,7 @@ def test_gui_auto_selection_and_atomic_local_import(offline_window, tmp_path, wi
     settings, panel = window.autotune_settings, window.autotune_settings.model_panel
     settings.set_mesh(analysis.path)
     wait(lambda: settings.analysis is not None)
-    settings.target.setText(", ".join(map(str, pose("y", -90)["target_quaternion_xyzw"])))
-    settings.confirm_manual()
+    select_manual(window, settings.analysis, "y", -90)
     for name in ("uphill_deg", "cross_slope_deg", "spread_angle_deg"):
         panel.fields[name][0].setValue(0)
     for mount, _, _, center in panel.mount_rows:
@@ -328,8 +328,7 @@ def test_x_mount_input_accepts_signed_values_and_invalidates_results(offline_win
     settings = window.autotune_settings
     settings.set_mesh(box_analysis(tmp_path).path)
     wait(lambda: settings.analysis is not None)
-    settings.target.setText(", ".join(map(str, pose("x", -90)["target_quaternion_xyzw"])))
-    settings.confirm_manual()
+    select_manual(window, settings.analysis, "x", -90)
     panel = settings.model_panel
     for name in ("uphill_deg", "cross_slope_deg", "spread_angle_deg"):
         panel.fields[name][0].setValue(0)
@@ -408,8 +407,7 @@ def test_gui_near_aligned_selection_and_hidden_nozzles(offline_window, tmp_path,
     settings = window.autotune_settings
     settings.set_mesh(path)
     wait(lambda: settings.analysis is not None)
-    settings.target.setText(", ".join(map(str, pose("y", -179.972)["target_quaternion_xyzw"])))
-    settings.confirm_manual()
+    select_manual(window, settings.analysis, "y", -179.972)
     settings.model_panel.fields["distance_m"][0].setValue(17.4)
     settings.model_panel.fields["contact_tolerance_m"][0].setValue(0.05)
     window.editor.speed.setValue(100)

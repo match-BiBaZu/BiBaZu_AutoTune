@@ -14,14 +14,29 @@ from test_analytical_model import pose
 from test_geometry import write_box
 from test_gui import offline_window as offline_window
 
+from bibazu_autotune.trial_context import manual_context
+from bibazu_autotune.workpiece import WorkpieceSelection
+
+
+def select_manual(window, analysis, axis="y", angle=90):
+    value = pose(axis, angle, analysis.sha256)
+    context = manual_context(
+        analysis.path.stem,
+        analysis.sha256,
+        value["source_quaternion_xyzw"],
+        value["target_quaternion_xyzw"],
+        rotation_axis=axis,
+        signed_angle_deg=angle,
+    )
+    window.accept_selection(WorkpieceSelection(context, analysis.path, analysis.unit, analysis))
+
 
 def prepare(window, wait, tmp_path, axis="y", angle=90):
     dialog = window.autotune_settings
     dialog.set_mesh(write_box(tmp_path / "box.stl"))
     dialog.density.setText("2700")
     wait(lambda: dialog.analysis is not None)
-    dialog.target.setText(", ".join(str(v) for v in pose(axis, angle)["target_quaternion_xyzw"]))
-    dialog.confirm_manual()
+    select_manual(window, dialog.analysis, axis, angle)
     panel = dialog.model_panel
     # These are regression cases for the earlier nozzle geometry.
     panel.fields["diameter_m"][0].setValue(0.7)
@@ -116,7 +131,7 @@ def test_calculation_configuration_and_no_writes(offline_window, tmp_path, monke
     assert "np.float" not in window.autotune_results.details.toPlainText()
     assert "1.0, 1.0" in window.autotune_results.details.toPlainText()
     assert window.editor.parameters() == before
-    assert not window.variants
+    assert not hasattr(window, "variants")
     assert not services.calls
     if os.environ.get("BIBAZU_GUI_ARTIFACTS"):
         font_id = QFontDatabase.addApplicationFont("C:/Windows/Fonts/segoeui.ttf")
@@ -134,10 +149,9 @@ def test_calculation_configuration_and_no_writes(offline_window, tmp_path, monke
     dialog.accept_model_result(old_generation, result, "")
     assert dialog.model_result is None
     assert window.autotune_results.table.item(0, 5).text() == "—"
-    window.add_variant()
     path = tmp_path / "recipe.json"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), ""))
-    window.save_recipe()
+    window.save_parameters()
     saved = json.loads(path.read_text("utf-8"))
     assert saved["trial_context"] == window.context
     assert not {"configuration", "candidates", "mounts"} & saved.keys()
@@ -171,8 +185,7 @@ def test_seven_hits_are_counted_and_explained_in_gui(offline_window, tmp_path):
     dialog.set_mesh(path)
     dialog.density.setText("1000")
     wait(lambda: dialog.analysis is not None)
-    dialog.target.setText(", ".join(str(v) for v in pose("y", -90)["target_quaternion_xyzw"]))
-    dialog.confirm_manual()
+    select_manual(window, dialog.analysis, "y", -90)
     panel = dialog.model_panel
     panel.fields["diameter_m"][0].setValue(0.7)
     panel.fields["pitch_m"][0].setValue((24 - 0.7) / 7)
@@ -211,10 +224,13 @@ def test_seven_hits_are_counted_and_explained_in_gui(offline_window, tmp_path):
 def test_manual_ambiguity_requires_explicit_axis(offline_window, tmp_path):
     window, _, _, wait = offline_window
     dialog, panel = prepare(window, wait, tmp_path, angle=180)
+    legacy = {
+        k: v for k, v in window.context.items() if k not in {"rotation_axis", "signed_angle_deg"}
+    }
+    window.set_context(legacy)
     window.calculate_autotune()
     assert "mehrdeutig" in window.autotune_results.details.toPlainText()
-    panel.manual_axis.setCurrentText("Y")
-    panel.manual_angle.setValue(180)
+    select_manual(window, dialog.analysis, "y", 180)
     window.calculate_autotune()
     wait(lambda: dialog.model_result is not None)
     assert len(window.autotune_results.results) == 2

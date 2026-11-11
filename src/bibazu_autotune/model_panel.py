@@ -202,14 +202,12 @@ class ModelPanel(QWidget):
             "Bei acht Öffnungen und 2,8 mm Teilung ergibt das 19,6 mm."
         )
         forms["openings"].addRow("Abstand erste–letzte Lochmitte [mm]", self.center_span)
-        self.manual_axis = QComboBox()
-        self.manual_axis.addItems(["Automatisch aus Posen/Roadmap", "X", "Y", "Z"])
-        self.manual_angle = QDoubleSpinBox()
-        self.manual_angle.setRange(-360, 360)
-        self.manual_angle.setValue(90)
-        self.add_note(forms["tipping"], "Manuelle Drehung: gilt nur für den aktuellen Übergang.")
-        forms["tipping"].addRow("Manuelle Achse bei mehrdeutigen Posen", self.manual_axis)
-        forms["tipping"].addRow("Manueller Drehwinkel mit Vorzeichen [°]", self.manual_angle)
+        self.add_note(
+            forms["tipping"],
+            "Ausgangslage, Kippachse, Drehsinn und Winkel auf der Hauptseite unter "
+            "»Aus STL laden« oder »Bauteil und Posen bearbeiten« festlegen. "
+            "Bei Roadmaps wird das Drehkommando aus der Transition übernommen.",
+        )
         self.add_note(
             forms["tipping"],
             "Auswertung am Impulsbeginn; Bewegung während des Impulses bleibt unberücksichtigt.",
@@ -317,8 +315,6 @@ class ModelPanel(QWidget):
         for control, _ in self.fields.values():
             control.valueChanged.connect(self.changed)
         self.count.valueChanged.connect(self.changed)
-        self.manual_axis.currentTextChanged.connect(self.changed)
-        self.manual_angle.valueChanged.connect(self.changed)
         self.navigation.currentRowChanged.connect(self.show_section)
         self.navigation.setCurrentRow(0)
 
@@ -428,10 +424,6 @@ class ModelPanel(QWidget):
         config = replace(
             self.parameter_configuration(),
             mounts=self.current_mounts(),
-            manual_axis=None
-            if self.manual_axis.currentIndex() == 0
-            else self.manual_axis.currentText().lower(),
-            manual_angle_deg=self.manual_angle.value(),
         )
         config.validate()
         return config

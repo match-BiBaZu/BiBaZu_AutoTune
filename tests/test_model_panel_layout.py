@@ -15,7 +15,7 @@ def test_parameter_sections_show_their_controls_without_changing_values(offline_
     window.resize(1440, 950)
     window.open_autotune_settings()
     settings.pages.setCurrentWidget(panel)
-    assert settings.pages.tabText(2) == "Modell und Anlage"
+    assert settings.pages.tabText(1) == "Modell und Anlage"
     assert [panel.navigation.item(i).text() for i in range(panel.navigation.count())] == [
         "Material und Kippen",
         "Düsen und Luftstrahl",
@@ -25,7 +25,7 @@ def test_parameter_sections_show_their_controls_without_changing_values(offline_
         "Montage je Array/Düse",
     ]
     controls = {
-        "material": [panel.density, panel.manual_axis, panel.manual_angle]
+        "material": [panel.density]
         + [
             panel.fields[name][0]
             for name in ("gravity_m_s2", "uphill_deg", "cross_slope_deg", "contact_tolerance_m")

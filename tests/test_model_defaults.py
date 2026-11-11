@@ -159,7 +159,7 @@ def test_gui_density_location_initial_mass_and_restart_defaults(offline_window, 
     dialog, panel = window.autotune_settings, window.autotune_settings.model_panel
     assert panel.density.text() == "1200"
     assert panel.isAncestorOf(dialog.density)
-    assert not dialog.pages.widget(0).isAncestorOf(dialog.density)
+    assert dialog.pages.widget(1).isAncestorOf(dialog.density)
     source = write_box(tmp_path / "box.stl")
     dialog.set_mesh(source)
     wait(lambda: dialog.analysis is not None)

@@ -56,7 +56,7 @@ def test_connect_only_reads_and_every_editor_control_writes_live(offline_window)
         expected = window.editor.parameters()
         wait_applied(window, services, wait, expected)
         assert len(writes(services)) == count
-        assert window.variants[window.editing]["parameters"] == expected
+        assert window.editor.parameters() == expected
     QTest.qWait(350)
     assert len(writes(services)) == len(changes)  # Readback produces no echo writes.
     assert not services.trials and not services.moving and not errors
@@ -89,7 +89,7 @@ def test_connected_profile_load_is_transferred_once(offline_window, tmp_path, mo
     path = tmp_path / "profile.json"
     path.write_text(json.dumps(make_profile(expected, context())), "utf-8")
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
-    window.load_profile()
+    window.load_parameters()
     wait_applied(window, services, wait, expected)
     assert writes(services) == [expected]
     assert window.context == context()
@@ -136,22 +136,15 @@ def test_offline_edits_are_kept_and_applied_once_after_connect(offline_window):
     assert not errors
 
 
-def test_variant_switch_writes_new_values_without_overwriting_previous_variant(offline_window):
+def test_cancelled_parameter_load_keeps_values_and_does_not_write(offline_window, monkeypatch):
     window, services, errors, wait = offline_window
     connect(window, wait)
     original = window.editor.parameters()
-    changed = copy.deepcopy(original)
-    changed["arrays"][0]["pressure_mbar"] = 1010
-    window.variants.append({"name": "Zweite Variante", "parameters": changed})
-    window.refresh_variants(0)
-    window.variant_list.setCurrentRow(1)
-    wait_applied(window, services, wait, changed)
-    assert window.variants[0]["parameters"] == original
-    window.variant_list.setCurrentRow(0)
-    wait_applied(window, services, wait, original)
-    assert window.variants[1]["parameters"] == changed
-    assert writes(services) == [changed, original]
-    assert not errors
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: ("", ""))
+    window.load_parameters()
+    QTest.qWait(350)
+    assert window.editor.parameters() == original
+    assert not writes(services) and not errors
 
 
 def test_edit_during_write_survives_older_readback(offline_window):
@@ -201,8 +194,7 @@ def test_parameter_lock_pauses_pending_write_and_keeps_conveyor_controls(offline
     assert window.parameters_locked
     assert window.parameter_lock_button.text() == "Parameter entsperren"
     assert not window.editor.isEnabled()
-    assert not window.variant_list.isEnabled()
-    assert not window.profile_button.isEnabled()
+    assert not window.load_parameters_action.isEnabled()
     assert not window.apply_parameters_button.isEnabled()
     assert window.conveyor_stop_button.isEnabled()
     QTest.qWait(350)
@@ -309,18 +301,16 @@ def test_invalid_edit_during_write_is_not_replaced_by_readback(offline_window):
     assert not errors
 
 
-def test_live_sync_is_suspended_during_trial(offline_window):
+def test_file_dialog_defers_live_sync_until_closed(offline_window):
     window, services, errors, wait = offline_window
-    window.set_context(context())
     connect(window, wait)
-    window.start_trial()
-    wait(lambda: window.state == "waiting")
-    assert not window.editor.isEnabled()
-    before = writes(services)
-    QTest.qWait(400)
-    assert writes(services) == before
-    assert window.sent_parameters is None
-    assert not services.moving and not errors
+    with window.file_operation():
+        window.editor.rows[0]["pressure_mbar"].setValue(1234)
+        QTest.qWait(350)
+        assert not writes(services)
+    expected = window.editor.parameters()
+    wait_applied(window, services, wait, expected)
+    assert writes(services) == [expected] and not errors
 
 
 def test_invalid_input_cancels_pending_write_and_recovers_when_valid(offline_window):

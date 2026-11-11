@@ -5,7 +5,9 @@ from __future__ import annotations
 import copy
 import math
 import re
-from typing import TypedDict
+from typing import NotRequired, TypedDict
+
+from .orientation_animation import rotate
 
 Quaternion = tuple[float, float, float, float]
 
@@ -17,6 +19,8 @@ class ManualContext(TypedDict):
     source_quaternion_xyzw: list[float]
     target_quaternion_xyzw: list[float]
     title: str
+    rotation_axis: NotRequired[str]
+    signed_angle_deg: NotRequired[float]
 
 
 def normalize_quaternion(value) -> Quaternion:
@@ -38,12 +42,14 @@ def normalize_quaternion(value) -> Quaternion:
     return tuple(-v if sign < 0 else v for v in result)
 
 
-def manual_context(part_name, mesh_sha256, source, target) -> ManualContext:
+def manual_context(
+    part_name, mesh_sha256, source, target, *, rotation_axis=None, signed_angle_deg=None
+) -> ManualContext:
     if not isinstance(part_name, str) or not part_name.strip():
         raise ValueError("Bauteilname fehlt.")
     if not isinstance(mesh_sha256, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", mesh_sha256):
         raise ValueError("Manueller Versuch benötigt einen gültigen STL-Inhaltshash.")
-    return ManualContext(
+    result = ManualContext(
         kind="manual",
         part_name=part_name.strip(),
         mesh_sha256=mesh_sha256.lower(),
@@ -51,17 +57,42 @@ def manual_context(part_name, mesh_sha256, source, target) -> ManualContext:
         target_quaternion_xyzw=list(normalize_quaternion(target)),
         title="Manueller Übergang",
     )
+    if rotation_axis is not None or signed_angle_deg is not None:
+        if rotation_axis not in ("x", "y", "z") or (
+            isinstance(signed_angle_deg, bool)
+            or not isinstance(signed_angle_deg, (int, float))
+            or not math.isfinite(signed_angle_deg)
+            or not 0 < abs(signed_angle_deg) <= 360
+        ):
+            raise ValueError("Manuelle Kippachse und Drehwinkel müssen gemeinsam gültig sein.")
+        expected = normalize_quaternion(
+            rotate(result["source_quaternion_xyzw"], rotation_axis, signed_angle_deg)
+        )
+        if (
+            abs(sum(a * b for a, b in zip(expected, result["target_quaternion_xyzw"], strict=True)))
+            < 1 - 1e-8
+        ):
+            raise ValueError("Manuelle Kippachse und Drehwinkel passen nicht zur Zielorientierung.")
+        result.update(rotation_axis=rotation_axis, signed_angle_deg=float(signed_angle_deg))
+    return result
 
 
 def validate_context(context):
     if not isinstance(context, dict):
         raise ValueError("Versuchskontext fehlt.")
     if context.get("kind") == "manual":
+        if ("rotation_axis" in context) != ("signed_angle_deg" in context) or (
+            "rotation_axis" in context
+            and (context["rotation_axis"] is None or context["signed_angle_deg"] is None)
+        ):
+            raise ValueError("Manuelle Kippachse und Drehwinkel müssen gemeinsam gültig sein.")
         return manual_context(
             context.get("part_name"),
             context.get("mesh_sha256"),
             context.get("source_quaternion_xyzw"),
             context.get("target_quaternion_xyzw"),
+            rotation_axis=context.get("rotation_axis"),
+            signed_angle_deg=context.get("signed_angle_deg"),
         )
     if not {"part_name", "source_pose_id", "target_pose_id"} <= context.keys():
         raise ValueError("Roadmap-Transition fehlt oder ist unvollständig.")
@@ -90,10 +121,13 @@ def read_context(document):
 
 def manual_identity(context):
     context = validate_context(context)
-    return [
+    identity = [
         "manual",
         context["part_name"],
         context["mesh_sha256"],
         *[round(v, 14) for v in context["source_quaternion_xyzw"]],
         *[round(v, 14) for v in context["target_quaternion_xyzw"]],
     ]
+    if "rotation_axis" in context:
+        identity += [context["rotation_axis"], context["signed_angle_deg"]]
+    return identity

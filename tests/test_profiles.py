@@ -48,3 +48,10 @@ def test_invalid_profile_has_clear_error():
         profile_parameters({"version": 99})
     with pytest.raises(ValueError, match="keine Arrays"):
         profile_parameters({"version": 13})
+
+
+def test_parameters_without_part_context_remain_pressure_v13_compatible():
+    profile = make_profile(parameters())
+    assert profile["version"] == 13 and profile["title"] == "Parametersatz"
+    assert "trial_context" not in profile and "roadmap_transition" not in profile
+    assert profile_parameters(profile) == parameters()

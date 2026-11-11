@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "bibazu-autotune"
 version = "0.1.0"
-description = "Manuell freigegebene BiBaZu-Parameterreihen mit Kamera-Messprotokoll"
+description = "BiBaZu-Parameterberechnung aus Roadmap oder STL mit SPS-Live-Bedienung"
 requires-python = ">=3.11"
 dependencies = [
     "PyQt6>=6.6,<7",

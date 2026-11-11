@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import time
@@ -6,117 +7,30 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QFont, QFontDatabase
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 from test_engine import Services, context, parameters
 
 from bibazu_autotune import app
-from bibazu_autotune.profiles import make_profile
-
-
-def test_window_recipe_trial_result_and_selection(tmp_path, monkeypatch):
-    qt = QApplication.instance() or QApplication([])
-    if not QFontDatabase.families():
-        font_id = QFontDatabase.addApplicationFont("C:/Windows/Fonts/segoeui.ttf")
-        families = QFontDatabase.applicationFontFamilies(font_id)
-        if families:
-            qt.setFont(QFont(families[0]))
-    services = Services()
-    monkeypatch.setattr(app, "PressureClient", lambda _: services.clients()[0])
-    monkeypatch.setattr(app, "VisionClient", lambda _: services.clients()[1])
-    errors = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
-    window = app.MainWindow("http://127.0.0.1:8765", "http://127.0.0.1:8766", tmp_path)
-    window.set_context(context())
-    window.worker.submit("connect")
-    window.show()
-
-    def wait(predicate):
-        deadline = time.monotonic() + 4
-        while time.monotonic() < deadline:
-            qt.processEvents()
-            if predicate():
-                return
-            time.sleep(0.005)
-        raise AssertionError(f"condition timed out: {window.state}, {errors}")
-
-    try:
-        wait(lambda: window.state == "ready")
-        assert window.editor.parameters() == parameters()
-        window.add_variant()
-        window.editor.rows[1]["pressure_mbar"].setValue(2100)
-        path = tmp_path / "recipe.json"
-        monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a: (str(path), ""))
-        window.save_recipe()
-        assert (
-            json.loads(path.read_text("utf-8"))["variants"][1]["parameters"]["arrays"][1][
-                "pressure_mbar"
-            ]
-            == 2100
-        )
-        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
-        window.load_recipe()
-        assert window.variant_list.count() == 2
-        window.variant_list.setCurrentRow(1)
-        window.start_trial()
-        wait(lambda: window.state == "waiting")
-        assert not window.editor.isEnabled()
-        assert window.trigger_button.isEnabled()
-        assert window.conveyor_start_button.isEnabled()
-        window.request_conveyor(True)
-        wait(lambda: services.moving)
-        window.request_conveyor(False)
-        wait(lambda: not services.moving and not window.motor_pending)
-        trial_id = next(iter(services.trials))
-        services.trials[trial_id].update(
-            status="completed",
-            measurements=[
-                {"timestamp": 1.0, "angle_deg": 12.0},
-                {"timestamp": 1.1, "angle_deg": 20.0},
-            ],
-        )
-        wait(lambda: window.state == "ready" and len(window.results) == 1)
-        assert window.result_table.rowCount() == 1
-        assert "2100 mbar" in window.result_details.text()
-        window.save_result()
-        wait(lambda: window.state == "ready")
-        assert json.loads(path.read_text("utf-8"))["version"] == 13
-        assert services.parameters["arrays"][1]["pressure_mbar"] == 2100
-        window.handle_event(
-            "result",
-            {
-                "trial_id": "aborted-without-clip",
-                "status": "aborted",
-                "parameters": parameters(),
-                "result": {"measurements": None},
-            },
-        )
-        assert window.plot.samples == []
-        assert errors == []
-        if os.environ.get("BIBAZU_GUI_ARTIFACTS"):
-            destination = app.Path(os.environ["BIBAZU_GUI_ARTIFACTS"])
-            destination.mkdir(parents=True, exist_ok=True)
-            assert window.grab().save(str(destination / "autotune.png"))
-    finally:
-        window.worker.stopping.set()
-        wait(lambda: not window.worker.isRunning())
-        window.close()
-        window.deleteLater()
-        qt.processEvents()
+from bibazu_autotune.profiles import empty_parameters, make_profile, profile_parameters
 
 
 @pytest.fixture
 def offline_window(tmp_path, monkeypatch):
     qt = QApplication.instance() or QApplication([])
     services = Services()
-    monkeypatch.setattr(app, "PressureClient", lambda _: services.clients()[0])
-    monkeypatch.setattr(app, "VisionClient", lambda _: services.clients()[1])
+
+    def pressure_client(_):
+        pressure, unused_vision = services.clients()
+        unused_vision.close()
+        return pressure
+
+    monkeypatch.setattr(app, "PressureClient", pressure_client)
     errors = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
-    window = app.MainWindow("http://127.0.0.1:8765", "http://127.0.0.1:8766", tmp_path)
+    window = app.MainWindow("http://127.0.0.1:8765", tmp_path / "runs")
 
     def wait(predicate):
-        deadline = time.monotonic() + 4
+        deadline = time.monotonic() + 6
         while time.monotonic() < deadline:
             qt.processEvents()
             if predicate():
@@ -126,12 +40,32 @@ def offline_window(tmp_path, monkeypatch):
 
     window.show()
     yield window, services, errors, wait
-    window.autotune_settings.stop()
-    wait(lambda: not window.autotune_settings.workers_running())
-    window.worker.stopping.set()
-    wait(lambda: not window.worker.isRunning())
+    window.close()
+    wait(lambda: not window.worker.isRunning() and not window.autotune_settings.workers_running())
     window.close()
     qt.processEvents()
+
+
+def test_operator_surface_contains_sources_and_no_experiment_controls(offline_window):
+    window, services, errors, _ = offline_window
+    texts = {b.text() for b in window.findChildren(QPushButton)}
+    assert {"Roadmap laden", "Aus STL laden", "Berechnung durchführen", "SPS verbinden"} <= texts
+    assert not texts & {
+        "Testreihe laden",
+        "Testreihe speichern",
+        "Variante kopieren",
+        "Variante entfernen",
+        "Kamera verbinden",
+        "Versuch freigeben",
+        "Aufnahme manuell auslösen",
+    }
+    assert not hasattr(window, "variants") and not hasattr(window, "variant_list")
+    assert [window.autotune_settings.pages.tabText(i) for i in range(2)] == [
+        "Geometrie prüfen",
+        "Modell und Anlage",
+    ]
+    assert "STL auswählen / ersetzen" not in texts
+    assert not services.calls and not errors
 
 
 def test_offline_profile_load_and_connect_preserves_local_selection(
@@ -144,106 +78,121 @@ def test_offline_profile_load_and_connect_preserves_local_selection(
     path = tmp_path / "profile.json"
     path.write_text(json.dumps(make_profile(candidate, local_context)), "utf-8")
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
-    assert window.state == "disconnected"
-    assert window.profile_button.isEnabled()
-    assert window.roadmap_button.isEnabled()
-    window.load_profile()
-    assert window.editor.parameters() == candidate
-    assert window.context == local_context
-    assert not any(method == "PUT" for method, _, _ in services.calls)
-    window.worker.submit("connect")
-    wait(lambda: window.state == "ready")
-    assert window.editor.parameters() == candidate
-    assert window.context == local_context
-    assert not errors
-
-
-def test_offline_recipe_load_adopts_transition(offline_window, tmp_path, monkeypatch):
-    window, services, errors, _ = offline_window
-    path = tmp_path / "recipe.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "roadmap_transition": context(),
-                "variants": [{"name": "local variant", "parameters": parameters()}],
-            }
-        ),
-        "utf-8",
-    )
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
-    window.load_recipe()
-    assert window.context == context()
-    assert window.editor.parameters() == parameters()
+    assert window.load_parameters_action.isEnabled()
+    window.load_parameters()
+    assert window.editor.parameters() == candidate and window.context == local_context
     assert not services.calls
-    assert not errors
+    window.worker.submit("connect")
+    wait(
+        lambda: (
+            window.state == "ready"
+            and services.parameters == candidate
+            and window.sent_parameters is None
+        )
+    )
+    assert window.editor.parameters() == candidate
+    assert not list(tmp_path.rglob("run.json"))
+    assert not services.trials and not errors
 
 
-def test_save_dialog_cancellation_does_not_apply(offline_window, monkeypatch):
+def test_parameter_save_roundtrip_and_cancel_never_write_sps(offline_window, tmp_path, monkeypatch):
     window, services, errors, wait = offline_window
     window.set_context(context())
+    window.editor.set_parameters(parameters())
     window.worker.submit("connect")
     wait(lambda: window.state == "ready")
-    window.handle_event(
-        "result",
-        {
-            "trial_id": "result1",
-            "status": "completed",
-            "parameters": parameters(),
-        },
-    )
+    path = tmp_path / "parameters.json"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), ""))
+    window.save_parameters()
+    saved = json.loads(path.read_text("utf-8"))
+    assert saved["version"] == 13 and "variants" not in saved
+    assert profile_parameters(saved) == parameters()
+    assert saved["roadmap_transition"] == context()
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: ("", ""))
-    window.save_result()
-    assert window.state == "ready"
+    window.save_parameters()
     assert not any(method == "PUT" for method, _, _ in services.calls)
     assert not errors
 
 
-def test_plc_remains_available_when_camera_api_times_out(offline_window):
-    window, services, errors, wait = offline_window
-    services.fail_host = "vision.local"
+def test_bad_parameter_file_does_not_change_selection_or_editor(
+    offline_window, tmp_path, monkeypatch
+):
+    window, _, errors, _ = offline_window
     window.set_context(context())
-    window.worker.submit("connect")
-    wait(lambda: window.state == "ready" and "timed out" in window.camera_connection_label.text())
+    before = copy.deepcopy(window.editor.parameters())
+    path = tmp_path / "bad.json"
+    bad = make_profile(parameters(), {**context(), "part_name": "wrong"})
+    bad["arrays"][0]["pressure_mbar"] = 6001
+    path.write_text(json.dumps(bad), "utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    window.load_parameters()
+    assert window.context == context() and window.editor.parameters() == before
+    assert errors
+
+
+@pytest.mark.parametrize("part_selected", [False, True])
+def test_plain_pressure_profile_load_save_preserves_part_selection(
+    offline_window, tmp_path, monkeypatch, part_selected
+):
+    window, services, errors, _ = offline_window
+    if part_selected:
+        window.set_context(context())
+    original_context = copy.deepcopy(window.context)
+    profile = make_profile(parameters())
+    # Older Pressure-GUI profiles can use individual nozzle flags only.
+    for array in profile["arrays"]:
+        del array["nozzles_enabled"]
+    path = tmp_path / "pressure-profile.json"
+    path.write_text(json.dumps(profile), "utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    window.load_parameters()
+    assert window.context == original_context
     assert window.editor.parameters() == parameters()
-    assert not window.start_button.isEnabled()
-    assert window.camera_connect_button.isEnabled()
-    assert window.conveyor_stop_button.isEnabled()
-    assert not errors
-    services.fail_host = None
-    window.worker.submit("connect_camera")
-    wait(lambda: window.camera_connected)
-    assert window.start_button.isEnabled()
+    assert window.save_parameters_action.isEnabled()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(path), ""))
+    window.save_parameters()
+    saved = json.loads(path.read_text("utf-8"))
+    assert profile_parameters(saved) == parameters()
+    assert saved.get("roadmap_transition") == original_context
+    assert not services.calls and not errors
 
 
-def test_manual_controls_without_roadmap_or_camera(offline_window):
+def test_loading_empty_local_profile_is_not_overwritten_on_connect(
+    offline_window, tmp_path, monkeypatch
+):
+    window, services, errors, wait = offline_window
+    desired = empty_parameters()
+    assert window.editor.parameters() == desired
+    path = tmp_path / "empty-profile.json"
+    path.write_text(json.dumps(make_profile(desired)), "utf-8")
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(path), ""))
+    window.load_parameters()
+    assert window.has_local_parameters and not services.calls
+    window.worker.submit("connect")
+    wait(lambda: services.parameters == desired and window.state == "ready")
+    assert window.editor.parameters() == desired and not errors
+
+
+def test_manual_controls_without_roadmap_or_camera_create_no_runs(offline_window, tmp_path):
     window, services, errors, wait = offline_window
     services.fail_host = "vision.local"
-    assert "Keine Roadmap geladen" in window.context_label.text()
-    assert not window.apply_parameters_button.isEnabled()
-    assert not window.conveyor_start_button.isEnabled()
+    assert "Kein Bauteil" in window.context_label.text()
     window.worker.submit("connect")
-    wait(lambda: window.state == "ready" and "timed out" in window.camera_connection_label.text())
-    assert window.context is None
-    assert window.apply_parameters_button.isEnabled()
-    assert window.conveyor_start_button.isEnabled()
-    assert not window.start_button.isEnabled()
-    window.editor.rows[0]["enabled"].setChecked(True)
-    window.editor.rows[1]["pressure_mbar"].setValue(1900)
-    window.editor.speed.setValue(90)
-    window.apply_parameters()
-    assert not window.conveyor_start_button.isEnabled()
     wait(lambda: window.state == "ready")
-    assert services.parameters["arrays"][0]["enabled"] is True
-    assert services.parameters["arrays"][1]["pressure_mbar"] == 1900
-    assert services.parameters["conveyor_speed_mm_per_sec"] == 90
-    assert not services.trials
+    assert window.editor.parameters() == parameters()
+    assert not any(method == "PUT" for method, _, _ in services.calls)
+    window.editor.rows[1]["pressure_mbar"].setValue(1900)
+    window.apply_parameters()
+    wait(
+        lambda: (
+            window.state == "ready" and services.parameters["arrays"][1]["pressure_mbar"] == 1900
+        )
+    )
     window.request_conveyor(True)
     wait(lambda: services.moving and not window.motor_pending)
-    assert window.apply_parameters_button.isEnabled()
-    assert window.editor.isEnabled()
-    assert window.conveyor_stop_button.isEnabled()
+    assert window.editor.isEnabled() and window.apply_parameters_button.isEnabled()
     window.request_conveyor(False)
-    wait(lambda: not services.moving and window.apply_parameters_button.isEnabled())
-    assert "Keine Roadmap geladen" in window.context_label.text()
-    assert not errors
+    wait(lambda: not services.moving and not window.motor_pending)
+    assert not list(tmp_path.rglob("run.json"))
+    assert not any("trials" in path or "measurements" in path for _, path, _ in services.calls)
+    assert not services.trials and not errors
