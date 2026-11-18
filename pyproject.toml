@@ -26,6 +26,7 @@ dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
 [project.scripts]
 bibazu-autotune = "bibazu_autotune.app:main"
 bibazu-autotune-api = "bibazu_autotune.pressure_service:main"
+bibazu-autotune-training = "bibazu_autotune.experiments.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bibazu_autotune"]

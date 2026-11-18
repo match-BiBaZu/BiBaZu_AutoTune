@@ -15,3 +15,4 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     if ($LASTEXITCODE -ne 0) { throw 'Paketinstallation fehlgeschlagen.' }
 }
 Write-Host 'Bereit. Start.cmd öffnet AutoTune mit eigener PLC-API; StartApi.cmd startet nur die API.'
+Write-Host 'Start-Training.cmd öffnet die Datenerfassung; --demo simuliert SPS und Kamera.'

@@ -8,9 +8,10 @@ und Modell-/Anlagenparameter.
 
 Die Anwendung arbeitet für Auswahl und Berechnung vollständig offline.
 SPS-Verbindung, Live-Parameterübertragung und manuelle Bandbedienung sind optional.
-Kamera, Variantenreihen und Versuchsdurchführung gehören nicht mehr zur normalen
-Oberfläche. Ein separates Programm zur experimentellen Datenerfassung und zum
-ML-Training wird später entwickelt und ist hier noch nicht begonnen.
+Kamera, Variantenreihen und Versuchsdurchführung liegen in der separat startbaren
+[GUI für Versuchsdaten und Training](docs/experiments.md). Sie entsteht zunächst
+in diesem Repository; die normale AutoTune-Oberfläche behält ihren bisherigen Ablauf.
+Die Datenerfassung und einfache Datenprüfung sind nutzbar, Modelltraining ist vorbereitet.
 Bestehende Versuchsbausteine und aufgezeichnete Daten bleiben erhalten.
 
 ## Forschungshintergrund
@@ -25,6 +26,11 @@ Python 3.11+ oder uv installieren, dann in diesem Repository:
 ./Setup.ps1
 ./Start.cmd
 ```
+
+Die neue Datenerfassung startet über **`Start-Training.cmd`**. Zum Ausprobieren
+ohne SPS und Kamera **`Start-Training.cmd --demo`** verwenden.
+Der Ablauf, die Kameraeinrichtung und das portable Datenformat stehen unter
+[Experimentelle Datenerfassung](docs/experiments.md).
 
 Der normale Start betreibt eine eigene, fensterlose PLC-API auf einem freien
 Loopback-Port. Die Oberfläche spricht ausschließlich über HTTP mit dieser API;
