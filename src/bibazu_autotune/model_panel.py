@@ -119,6 +119,11 @@ class ModelPanel(QWidget):
         self.count.setRange(1, 256)
         self.count.setValue(config.opening_count)
         forms["openings"].addRow("Öffnungen je schaltbarer Düse", self.count)
+        self.offset_strategy = QComboBox()
+        self.offset_strategy.addItem("Relativ zur Trefferfläche", "relative")
+        self.offset_strategy.addItem("Feste Reserve", "fixed")
+        self.offset_strategy.setCurrentIndex(self.offset_strategy.findData(config.offset_strategy))
+        forms["offset"].addRow("Y/Z-Offsetstrategie", self.offset_strategy)
         specs = [
             ("openings", "diameter_m", "Einzelöffnungsdurchmesser [mm]", 1000, 0.001, 100),
             ("openings", "pitch_m", "Öffnungs-Mittenabstand [mm]", 1000, 0, 1000),
@@ -128,11 +133,12 @@ class ModelPanel(QWidget):
             (
                 "offset",
                 "offset_safety_m",
-                "Zusätzliche Offsetreserve entlang X [mm]",
+                "Feste Offsetreserve entlang X [mm]",
                 1000,
                 0,
                 1000,
             ),
+            ("offset", "offset_inset_fraction", "Einrückung je Seite [%]", 100, 0, 50),
             ("coverage", "half_hit_lower", "Gewicht 0,5 ab Überdeckung [%]", 100, 0.001, 50),
             ("coverage", "half_hit_upper", "Gewicht 1 ab Überdeckung [%]", 100, 50, 99.999),
             ("flow", "drag_coefficient", "Widerstandsbeiwert c_d", 1, 0.001, 100),
@@ -153,10 +159,22 @@ class ModelPanel(QWidget):
             self.fields[name] = (control, scale)
             forms[group].addRow(label, control)
         self.fields["offset_safety_m"][0].setToolTip(
-            "Zusätzliche Sicherheit in beide Förderrichtungen, über Strahlradius und "
-            "Randabstand hinaus. Standard 5 mm. Der Kraftangriff liegt weiter innerhalb "
-            "der Bauteilfläche; seitliche Reihenabstände bleiben unverändert. "
-            "0 mm stellt die bisherige Offsetauswahl wieder her."
+            "Zusätzliche feste Reserve über Strahlradius und Randabstand hinaus. "
+            "Gilt für X-Kippbewegungen und für die Y/Z-Strategie »Feste Reserve«. "
+            "Bei relativer Y/Z-Auswahl wird sie durch die prozentuale Einrückung ersetzt."
+        )
+        self.fields["offset_inset_fraction"][0].setToolTip(
+            "Anteil je Seite des zusammenhängenden nutzbaren Trefferbereichs, "
+            "nach Abzug von Strahlradius und Randabstand. Standard 20 %. "
+            "50 % wählt die Mitte. Aussparungen werden nicht überbrückt."
+        )
+        self.add_note(
+            forms["offset"],
+            "Offset 0 mm: Die Mitte der Referenzdüse liegt an der Bauteilvorderkante. "
+            "Die relative Auswahl gilt für beide Y/Z-Drehrichtungen. "
+            "Dabei wird die feste Reserve nicht addiert. "
+            "X-Kippbewegungen behalten die zentrierte Auswahl mit fester Reserve. "
+            "Bandbewegung während des Impulses wird nicht berechnet.",
         )
         self.add_note(
             forms["coverage"],
@@ -315,6 +333,9 @@ class ModelPanel(QWidget):
         for control, _ in self.fields.values():
             control.valueChanged.connect(self.changed)
         self.count.valueChanged.connect(self.changed)
+        self.offset_strategy.currentIndexChanged.connect(self.changed)
+        self.offset_strategy.currentIndexChanged.connect(self.update_offset_controls)
+        self.update_offset_controls()
         self.navigation.currentRowChanged.connect(self.show_section)
         self.navigation.setCurrentRow(0)
 
@@ -389,9 +410,18 @@ class ModelPanel(QWidget):
         self._linking = False
         self.changed.emit()
 
+    def update_offset_controls(self):
+        self.fields["offset_inset_fraction"][0].setEnabled(
+            self.offset_strategy.currentData() == "relative"
+        )
+
     def parameter_configuration(self) -> ModelConfiguration:
         values = {name: control.value() / scale for name, (control, scale) in self.fields.items()}
-        config = ModelConfiguration(**values, opening_count=self.count.value())
+        config = ModelConfiguration(
+            **values,
+            opening_count=self.count.value(),
+            offset_strategy=self.offset_strategy.currentData(),
+        )
         config.validate()
         return config
 

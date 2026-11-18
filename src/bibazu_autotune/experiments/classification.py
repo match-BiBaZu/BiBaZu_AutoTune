@@ -8,8 +8,20 @@ from statistics import median
 from .models import ClassificationConfig
 
 
-def evaluate(rows, config: ClassificationConfig, *, completed=True, dropped_frames=0):
+def evaluate(
+    rows, config: ClassificationConfig, *, completed=True, dropped_frames=0, stop_reason=None
+):
     config.validate()
+    if config.algorithm_version == 2:
+        from .classification_v2 import evaluate_targeted
+
+        return evaluate_targeted(
+            rows,
+            config,
+            completed=completed,
+            dropped_frames=dropped_frames,
+            stop_reason=stop_reason,
+        )
     samples = []
     previous = None
     segment = 0

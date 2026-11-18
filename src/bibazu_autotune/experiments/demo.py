@@ -91,13 +91,35 @@ class DemoVision:
     def measurements(self, after=0):
         return {"measurements": [], "latest_cursor": 0, "next_cursor": 0, "overflow": False}
 
-    def start(self, run_id, trial_id, context, timeout_seconds=60):
+    def capabilities(self):
+        return {
+            "trial_start_mode_override": True,
+            "review_video_v1": True,
+            "direct_trial_output": True,
+            "qualified_presence_start": True,
+        }
+
+    def start(
+        self,
+        run_id,
+        trial_id,
+        context,
+        timeout_seconds=60,
+        *,
+        start_mode=None,
+        storage_profile=None,
+        output_directory=None,
+        presence_confirm_seconds=None,
+    ):
         self.trials[trial_id] = {
             "status": "armed",
             "run_id": run_id,
             "trial_id": trial_id,
             "context": context,
             "started": self.clock(),
+            "storage_profile": storage_profile,
+            "output_directory": output_directory,
+            "presence_confirm_seconds": presence_confirm_seconds,
         }
         return self.trials[trial_id]
 
@@ -108,8 +130,22 @@ class DemoVision:
             and self.pressure.moving
             and (self.clock() - record["started"] > 1)
         ):
-            folder = Path(self.temporary.name) / trial_id
+            video_mode = record.get("storage_profile") == "review_video_v1"
+            folder = (
+                Path(record["output_directory"]) / "clip"
+                if video_mode
+                else Path(self.temporary.name) / trial_id
+            )
             folder.mkdir()
+            writer = None
+            if video_mode:
+                import cv2
+
+                writer = cv2.VideoWriter(
+                    str(folder / "review.mp4"), cv2.VideoWriter_fourcc(*"mp4v"), 50, (256, 192)
+                )
+                if not writer.isOpened():
+                    raise RuntimeError("Demo-Videoencoder nicht verfügbar")
             selected = next(a for a in record["context"]["parameters"]["arrays"] if a["enabled"])
             target = record["context"].get("target_angle_deg", 90)
             direction = record["context"].get("camera_direction", 1)
@@ -124,10 +160,13 @@ class DemoVision:
                 image = np.full((192, 256), 225, dtype=np.uint8)
                 image[(abs(along) < 55) & (abs(across) < 17)] = 40
                 filename = f"frame_{index:06d}.npy"
-                np.save(folder / filename, image, allow_pickle=False)
+                if video_mode:
+                    writer.write(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
+                else:
+                    np.save(folder / filename, image, allow_pickle=False)
                 frames.append(
                     {
-                        "file": filename,
+                        **({"video_frame_index": index} if video_mode else {"file": filename}),
                         "timestamp": index * 0.02,
                         "frame_id": index,
                         "measurement": {
@@ -138,14 +177,31 @@ class DemoVision:
                         },
                     }
                 )
+            if writer is not None:
+                writer.release()
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2 if video_mode else 1,
                 "frame_count": len(frames),
                 "frames": frames,
                 "metadata": {"trial_id": trial_id, "run_id": record["run_id"]},
                 "stop_reason": "part_left",
                 "aborted": False,
                 "dropped_frames": 0,
+                **(
+                    {
+                        "media": {
+                            "format": "mp4v",
+                            "state": "available",
+                            "file": "review.mp4",
+                            "fps": 50,
+                            "crop_xywh": [0, 0, 256, 192],
+                            "image_size": [256, 192],
+                            "scale_xy": [1, 1],
+                        }
+                    }
+                    if video_mode
+                    else {}
+                ),
             }
             atomic_json(folder / "manifest.json", manifest)
             record.update(status="completed", stop_reason="part_left", clip_path=str(folder))

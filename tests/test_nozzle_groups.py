@@ -33,7 +33,10 @@ from bibazu_autotune.model_defaults import ModelDefaultsStore
 
 def measured_config(**values):
     config = ModelConfiguration(
-        uphill_deg=0, cross_slope_deg=0, spread_angle_deg=0, **{"offset_safety_m": 0, **values}
+        uphill_deg=0,
+        cross_slope_deg=0,
+        spread_angle_deg=0,
+        **{"offset_safety_m": 0, "offset_strategy": "fixed", **values},
     )
     return replace(
         config,
@@ -133,7 +136,7 @@ def test_x_offset_keeps_reference_when_only_nozzle_five_hits(tmp_path, shift):
     )
     body, _, impact = impact_for(box_analysis(tmp_path), config, axis="x")
     assert impact.active_nozzles == (5,)
-    first_base = 0.04 + config.jet_radius_m + shift
+    first_base = 0.04 + shift - config.center_span_m / 2
     clearance = config.jet_radius_m + config.margin_m
     lower = max(0, first_base + config.center_span_m - (body.vertices[:, 0].max() - clearance))
     upper = first_base - (body.vertices[:, 0].min() + clearance)

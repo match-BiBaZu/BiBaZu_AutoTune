@@ -67,6 +67,13 @@ Für die manuelle SPS-Bedienung ist keine Bauteilauswahl erforderlich.
    wartet auf bestätigte Parameterwerte. Während normaler Bandfahrt bleibt der
    Editor bedienbar.
 
+**Offset mit Bandsollwert** ist in einem neuen lokalen Parametersatz aktiviert
+und wird bei der Kandidatenübernahme automatisch eingeschaltet. Die SPS verwendet
+dann die eingestellte Bandgeschwindigkeit für den Auslösezeitpunkt; ohne Häkchen
+verwendet sie die Lichtschranken-Geschwindigkeitsmessung. Der Offset bleibt in
+beiden Fällen wirksam. Explizite Werte aus geladenen Profilen und dem SPS-Rücklesen
+werden beibehalten; der Verbindungsaufbau erzwingt keine Änderung des Häkchens.
+
 Berechnen und Bauteil-/Poseauswahl schreiben keine SPS-Werte. Erst die ausdrückliche
 Kandidatenübernahme ändert den Editor und löst bei verbundener SPS dessen Live-Übertragung aus.
 Dasselbe gilt für Änderungen im Editor und das Laden eines Parametersatzes.
@@ -176,7 +183,7 @@ die Reihe im sichtbaren Fenster. Der normale Aufruf wartet auf den Startbutton.
    | --- | --- |
    | **Material und Kippen** | Dichte (Standard 1200 kg/m³), Schwerkraft, Neigung und Kontakt-Toleranz |
    | **Düsen und Luftstrahl** | Öffnungen, Durchmesser, Teilung, Breiten, Abstand und Strahlöffnungswinkel |
-   | **Treffer und Offset** | Treffergewichte, Randabstand und Offsetreserve |
+   | **Treffer und Offset** | Treffergewichte, Randabstand, relative Einrückung und feste Reserve |
    | **Analytischer Druck** | Strömungsbeiwerte, Isentropenexponent und Umgebungsdruck |
    | **SPS-Druckskalierung** | Koeffizienten a/b für den SPS-Sollwert |
    | **Montage je Array/Düse** | Reihenmitten, Achsen und X-Versätze, nach Array filterbar |
@@ -265,7 +272,7 @@ die Außenbreite über die Öffnungskanten beträgt **19,6 + 0,8 = 20,4 mm**.
 Beide Breiten werden in der GUI getrennt angezeigt. Sie bezeichnen die Öffnungen,
 während **24,88 mm** der Abstand zwischen zwei Düsenmitten ist.
 Die weiteren Vorgaben bleiben 25 mm Düse–Bauteil-Abstand, 20° Strahlöffnungswinkel,
-1 mm zusätzlichem Randabstand und **5 mm zusätzlicher Offsetreserve entlang X**,
+1 mm zusätzlichem Randabstand und **20 % Einrückung je Seite für Y/Z**,
 c_d=1, c_m=0,47, c_c=1, κ=1,4, 1,013 bar absolutem
 Umgebungsdruck und g=9,81 m/s². Außenbreite und Teilung werden gekoppelt editiert;
 der Abstand zwischen erster und letzter Lochmitte wird daraus berechnet. Der Konzentrizitätsfaktor
@@ -316,20 +323,31 @@ wird aus der Schnittfläche eines numerisch mit 512 Seiten angenäherten Strahlk
 und der Bauteilprojektion bestimmt. Eine bloße Tangentialberührung zählt nicht;
 Aussparungen werden aus dem vollständigen Mesh berücksichtigt.
 Der zusätzliche Randabstand dient der Offsetauslegung und wird nicht von der
-Trefferfläche abgezogen. Unter **Treffer und Offset → Zusätzliche Offsetreserve entlang X**
-werden standardmäßig weitere **5 mm in beiden X-Richtungen** berücksichtigt.
-Ein Volltreffer für die Düsenfreigabe muss damit auch bei einer Verschiebung innerhalb
-dieser Reserve vollständig einschließlich Randabstand auf derselben Fläche liegen;
-Aussparungen dürfen dabei nicht überquert werden. Die Reserve wirkt nur längs zum Band,
-damit schmale Bauteile nicht wegen eines vergrößerten seitlichen Randabstands ausfallen.
-Treffergewichte und Hebelarme werden weiterhin an der tatsächlich gewählten Startposition
-berechnet. Die Einstellung wird mit den Modellstandards gespeichert; alte Standarddateien
-ohne dieses Feld erhalten beim Laden 5 mm, ohne dabei die Datei zu verändern.
-Mit **0 mm** gilt die bisherige Offsetauswahl.
-Passt die Reserve bei einem kurzen Bauteil nicht auf die Fläche, bleibt der Vorschlag
-mit einer Meldung gesperrt; die Reserve kann für dieses Bauteil reduziert werden.
-Die Reserve ist ein räumlicher Sicherheitsabstand, keine Korrektur eines abweichenden
-SPS-Nullpunkts oder eine Berechnung von Ventil- und Bandverzögerungen.
+Trefferfläche abgezogen. Unter **Treffer und Offset → Y/Z-Offsetstrategie** ist
+**Relativ zur Trefferfläche** voreingestellt. Nach Abzug von Strahlradius und
+obligatorischem Randabstand werden die zusammenhängenden zulässigen X-Intervalle
+für jede Öffnung bestimmt. Aus `[a, b]` wird bei der Vorgabe **20 % je Seite**
+`[a + 0,20·(b−a), a + 0,80·(b−a)]`. Aussparungen und getrennte Flächen werden
+einzeln behandelt und niemals durch die Einrückung überbrückt.
+
+Die Einstellung **Einrückung je Seite [%]** gilt für beide Y/Z-Drehrichtungen und
+ist von 0 bis einschließlich 50 % veränderbar: 0 % nutzt den gesamten zulässigen
+Bereich, 50 % dessen Mitte. Die Einrückung schrumpft bei kurzen Bauteilen mit der
+nutzbaren Fläche. Passt bereits der Strahl einschließlich obligatorischem
+Randabstand nicht auf die Fläche, bleibt der Kandidat gesperrt.
+
+Die alternative Strategie **Feste Reserve** verwendet weiterhin
+**Feste Offsetreserve entlang X [mm]** (Vorgabe 5 mm). Diese wird für die relative
+Y/Z-Auswahl **ersetzt und nicht addiert**. X-Kippbewegungen behalten die bisherige
+zentrierte Auswahl mit fester Reserve. Zu kurze Intervalle für die feste Reserve
+werden weiterhin abgelehnt. Seitliche Reihenabstände bleiben unverändert.
+
+Strategie und Einrückung werden mit den Modellstandards gespeichert. Alte
+Standarddateien erhalten beim Laden die relative Strategie mit 20 %, während
+gespeicherte feste Reserven und übrige Werte erhalten bleiben. Erst ausdrückliches
+Speichern aktualisiert die Datei. Treffergewichte, Hebelarme, Kraft und Druck werden
+an der neu gewählten Startposition berechnet. Band- und Kippbewegung während des
+Impulses sowie Ventilverzögerungen werden nicht dynamisch simuliert.
 Für Strahlradius r_j und wirksame Fläche gilt:
 
 ```text
@@ -344,15 +362,29 @@ Die Einzelhebelarme ℓ_i folgen aus Auftreffpunkt, Kippkante und Strahlrichtung
 Der feste Offsetbezug bleibt bei Düse 1 beziehungsweise 4, auch wenn diese aus ist;
 die erste aktive Öffnung wird nicht als neuer Nullpunkt verwendet.
 Die dreistufige Bewertung ist eine Näherung der Flächenüberdeckung und keine
-kontinuierliche Strömungssimulation. Der BiBaZu-Offset
-beginnt bei der ersten Berührung der Strahlhülle mit der Vorderkantenebene. Bei
-einer quer zu X liegenden Reihe gilt **x_Treffer = x_Vorderkante + r_j − Offset**.
-Für den Kraftangriff nahe der Hinterkante eines geraden 80-mm-Bauteils ergibt sich
-mit 1 mm Randabstand und 5 mm Offsetreserve ungefähr **80 − 1 − 5 = 74 mm**
-statt bisher 79 mm. Für die Gegenrichtung wandert die Position entsprechend von
-der Vorderkante weiter nach innen. Bei unregelmäßigen Konturen können andere Werte entstehen.
-Bei einer längs zu X liegenden Reihe wird zusätzlich die Position jeder Öffnung
-berücksichtigt. Der Schwerpunktabstand und der tatsächliche Hebelarm zur Kippkante
+kontinuierliche Strömungssimulation. Der BiBaZu-/SPS-Offset **0 mm** bedeutet:
+Die **Mitte der Referenzdüse liegt an der Bauteilvorderkante**, entsprechend der
+Pressure-GUI. Bei einer quer zu X liegenden Reihe gilt deshalb
+**x_Treffer = x_Vorderkante − Offset**. Der Modellwert wird direkt in den Editor
+übernommen; ein Strahlradius darf dabei weder addiert noch erneut abgezogen werden.
+Die frühere Konvention ab erster Strahlrandberührung wird nicht mehr verwendet.
+
+Für eine rechteckige Fläche der Länge L mit `c = r_j + Randabstand` und
+`f = 0,20` gilt `Offset_vorne = c + f·(L−2c)` und
+`Offset_hinten = c + (1−f)·(L−2c)`, also bei 20 % **`c + 0,8·(L−2c)`**.
+Mit 17,4 mm Düsenabstand, 20° Öffnungswinkel,
+0,8 mm Lochdurchmesser und 1 mm Randabstand ergeben sich beispielsweise:
+
+| Bauteillänge | Offset vorne | Offset hinten |
+| --- | --- | --- |
+| 80 mm | 18,7 mm | 61,3 mm |
+| 20 mm | 6,7 mm | 13,3 mm |
+
+Bei unregelmäßigen Konturen entscheidet das jeweilige zusammenhängende Intervall,
+nicht die Bounding-Box. Bei längs zu X liegenden Reihen gilt zusätzlich der
+vorzeichenbehaftete Abstand jeder Öffnung von der **Reihenmitte der Referenzdüse 4**
+sowie der Montageversatz der Erweiterungsdüse. Der Schwerpunktabstand und der
+tatsächliche Hebelarm zur Kippkante
 werden getrennt ausgewiesen. Für Y/Z wird die äußerste Position mit positivem
 Hebelarm gewählt, bei der zunächst möglichst viele Düsen mindestens einen vollständig
 abgedeckten Strahl einschließlich Randabstand besitzen. Unter diesen Positionen

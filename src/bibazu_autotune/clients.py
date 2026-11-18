@@ -101,7 +101,21 @@ class PressureClient(Client):
 class VisionClient(Client):
     service_name = "Kamera-API"
 
-    def start(self, run_id, trial_id, context, timeout_seconds=60.0):
+    def capabilities(self):
+        return self.request("GET", "capabilities")
+
+    def start(
+        self,
+        run_id,
+        trial_id,
+        context,
+        timeout_seconds=60.0,
+        *,
+        start_mode=None,
+        storage_profile=None,
+        output_directory=None,
+        presence_confirm_seconds=None,
+    ):
         return self.request(
             "POST",
             "trials",
@@ -110,6 +124,17 @@ class VisionClient(Client):
                 "trial_id": trial_id,
                 "context": context,
                 "timeout_seconds": timeout_seconds,
+                **({"start_mode": start_mode} if start_mode is not None else {}),
+                **(
+                    {"presence_confirm_seconds": presence_confirm_seconds}
+                    if presence_confirm_seconds is not None
+                    else {}
+                ),
+                **(
+                    {"storage_profile": storage_profile, "output_directory": output_directory}
+                    if storage_profile is not None
+                    else {}
+                ),
             },
         )
 

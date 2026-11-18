@@ -27,6 +27,7 @@ from .pressure_scaling import (
 from .trial_context import normalize_quaternion
 
 Axis = Literal["x", "y", "z"]
+OffsetStrategy = Literal["relative", "fixed"]
 CandidateKey = tuple[int, int]  # Array and reference nozzle (1 or 4).
 EPS = 1e-10
 DEFAULT_ROW_CENTER_M = 0.01244
@@ -84,6 +85,8 @@ class ModelConfiguration:
     spread_angle_deg: float = 20.0
     margin_m: float = 0.001
     offset_safety_m: float = 0.005
+    offset_strategy: OffsetStrategy = "relative"
+    offset_inset_fraction: float = 0.20
     drag_coefficient: float = 1.0
     mesh_coefficient: float = 0.47
     concentricity_coefficient: float = 1.0
@@ -153,6 +156,15 @@ class ModelConfiguration:
             raise ValueError("Randabstand muss endlich und nichtnegativ sein.")
         if not math.isfinite(self.offset_safety_m) or self.offset_safety_m < 0:
             raise ValueError("Offsetreserve muss endlich und nichtnegativ sein.")
+        if self.offset_strategy not in ("relative", "fixed"):
+            raise ValueError("Offsetstrategie muss relativ oder feste Reserve sein.")
+        if (
+            isinstance(self.offset_inset_fraction, bool)
+            or not isinstance(self.offset_inset_fraction, (int, float))
+            or not math.isfinite(self.offset_inset_fraction)
+            or not 0 <= self.offset_inset_fraction <= 0.5
+        ):
+            raise ValueError("Relative Offseteinrückung muss endlich und zwischen 0 und 50 % sein.")
         validate_hit_thresholds(self.half_hit_lower, self.half_hit_upper)
         if not math.isfinite(self.spread_angle_deg) or not 0 <= self.spread_angle_deg < 180:
             raise ValueError("Strahlöffnungswinkel muss zwischen 0 und weniger als 180° liegen.")
@@ -454,6 +466,9 @@ class ImpactSolution:
     geometric_weights: tuple[float, ...] = ()
     lever_arms_m: tuple[float, ...] = ()
     offset_safety_m: float = 0.0
+    offset_strategy: OffsetStrategy = "fixed"
+    offset_inset_fraction: float = 0.0
+    allowed_x_intervals_m: tuple[tuple[tuple[float, float], ...], ...] = ()
 
 
 def jet_overlap_fractions(shape, centers, radius_m: float) -> tuple[float, ...]:
@@ -555,6 +570,9 @@ class AutomaticOffsetEstimator:
             )
         row = (np.arange(config.opening_count) - (config.opening_count - 1) / 2) * config.pitch_m
         along_x = turn.axis == "x"
+        relative = not along_x and config.offset_strategy == "relative"
+        reserve = 0.0 if relative else config.offset_safety_m
+        fraction = config.offset_inset_fraction if relative else 0.0
         transverse = 2 if mount.normal_axis == "y" else 1
         locations = np.concatenate(
             [
@@ -563,23 +581,21 @@ class AutomaticOffsetEstimator:
             ]
         )
         front = float(body.vertices[:, 0].max())
-        # Never rebase to the first active nozzle: nozzle 1/4 remains the timing reference.
+        # SPS offset 0 aligns the front edge with the CENTER of reference nozzle 1/4.
+        # Keep that reference even when only an extension nozzle is powered.
         bases = np.concatenate(
             [
                 front
-                + radius
-                + (
-                    m.longitudinal_offset_m + row - row.min()
-                    if along_x
-                    else np.zeros(config.opening_count)
-                )
+                + (m.longitudinal_offset_m + row if along_x else np.zeros(config.opening_count))
                 for m in group
             ]
         )
         opening_ids = tuple(
             (m.nozzle_index, opening + 1) for m in group for opening in range(config.opening_count)
         )
-        intervals = _safe_x_intervals(safe_area, locations, shape.bounds, config.offset_safety_m)
+        intervals = _safe_x_intervals(
+            safe_area, locations, shape.bounds, reserve, fraction=fraction
+        )
         boundaries = _offset_boundaries(bases, intervals)
         if not boundaries:
             raise ValueError(
@@ -605,8 +621,7 @@ class AutomaticOffsetEstimator:
             for (x, y), allowed in zip(centers, intervals, strict=True):
                 point = Point(x, y)
                 full_hit = shape.covers(point) and boundary.distance(point) >= clearance - EPS
-                if config.offset_safety_m > 0:
-                    full_hit = full_hit and any(lo - EPS <= x <= hi + EPS for lo, hi in allowed)
+                full_hit = full_hit and any(lo - EPS <= x <= hi + EPS for lo, hi in allowed)
                 full_weights.append(float(full_hit))
             active_nozzles = tuple(
                 m.nozzle_index
@@ -642,7 +657,10 @@ class AutomaticOffsetEstimator:
                 opening_ids=opening_ids,
                 geometric_weights=geometric_weights,
                 lever_arms_m=tuple(map(float, levers)),
-                offset_safety_m=config.offset_safety_m,
+                offset_safety_m=reserve,
+                offset_strategy="relative" if relative else "fixed",
+                offset_inset_fraction=fraction,
+                allowed_x_intervals_m=tuple(intervals),
             )
 
         if along_x:
@@ -655,19 +673,23 @@ class AutomaticOffsetEstimator:
         return impact
 
 
-def _safe_x_intervals(safe_area, locations, bounds, reserve):
-    """Keep each full jet inside its own surface interval for +/- X uncertainty."""
+def _safe_x_intervals(safe_area, locations, bounds, reserve, *, fraction=0.0):
+    """Inset each connected full-jet interval without crossing holes or gaps."""
     xmin, _, xmax, _ = bounds
     intervals = []
     for location in locations:
         row_line = LineString([(xmin - 1, location), (xmax + 1, location)])
-        intervals.append(
-            tuple(
-                (start + reserve, end - reserve)
-                for start, end in _intervals(safe_area.intersection(row_line))
-                if end - start >= 2 * reserve
-            )
-        )
+        allowed = []
+        for start, end in _intervals(safe_area.intersection(row_line)):
+            if end - start < 2 * reserve:
+                continue
+            start, end = start + reserve, end - reserve
+            if fraction == 0.5:
+                allowed.append(((start + end) / 2, (start + end) / 2))
+            else:
+                span = end - start
+                allowed.append((start + fraction * span, start + (1 - fraction) * span))
+        intervals.append(tuple(allowed))
     return intervals
 
 

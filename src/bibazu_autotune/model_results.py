@@ -208,6 +208,7 @@ class CalculationResultsWidget(QWidget):
         lines = [f"Array {c.mount.array_index}, {c.nozzle_label}: {c.message}"]
         lines.append("Förderbandrichtung: +X (im Trefferbild von rechts nach links)")
         lines.append(f"Fester Offsetbezug: Referenzdüse {c.mount.nozzle_index}")
+        lines.append("SPS-Offset 0 mm: Mitte der Referenzdüse an der Bauteilvorderkante.")
         if c.mechanics:
             m = c.mechanics
             lines += [
@@ -220,6 +221,12 @@ class CalculationResultsWidget(QWidget):
             ]
         if c.impact:
             i = c.impact
+            lines.append(
+                f"Offsetstrategie: Relativ zur Trefferfläche · "
+                f"Einrückung je Seite: {i.offset_inset_fraction * 100:g} %"
+                if i.offset_strategy == "relative"
+                else "Offsetstrategie: Feste Reserve"
+            )
             if i.opening_ids:
                 for nozzle in sorted({n for n, _ in i.opening_ids}):
                     indices = [j for j, (n, _) in enumerate(i.opening_ids) if n == nozzle]
@@ -265,6 +272,12 @@ class CalculationResultsWidget(QWidget):
                     lines.append(f"  Flächenüberdeckung: {i.coverage_fractions[number - 1]:.2%}")
                 if i.lever_arms_m:
                     lines.append(f"  Einzelhebelarm [mm]: {i.lever_arms_m[number - 1] * 1000:.6g}")
+                if i.allowed_x_intervals_m:
+                    intervals = "; ".join(
+                        f"[{lo * 1000:.6g}, {hi * 1000:.6g}]"
+                        for lo, hi in i.allowed_x_intervals_m[number - 1]
+                    )
+                    lines.append("  Zulässige Auslegungsbereiche X [mm]: " + (intervals or "keine"))
         if c.pressure:
             p = c.pressure
             lines += [

@@ -21,7 +21,7 @@ def empty_parameters():
                 "pulse_duration_ms": 100,
                 "delay_ms": 0,
                 "offset_mm": 0.0,
-                "conveyor_velocity_delay": False,
+                "conveyor_velocity_delay": True,
             }
             for i in range(1, 5)
         ],

@@ -11,7 +11,8 @@
 uv run bibazu-autotune-training
 ```
 
-Es werden keine zusätzlichen Python-Abhängigkeiten benötigt. Der normale Start
+Nach dem Update einmal `Setup.ps1` ausführen; OpenCV wird nun auch für die
+Videoauswertung der Trainings-GUI benötigt. Der normale Start
 verwendet dieselbe exklusive SPS-API und denselben Prozess-Lock wie AutoTune.
 AutoTune, Pressure Control und Drucktest vorher schließen. Öffnen und Verbinden
 starten weder das Band noch einen Versuch. Bei Sitzungsende oder Verbindungsfehler
@@ -23,6 +24,12 @@ und benötigt keine laufende Kamera-GUI; ihre Kampagnen sind als simuliert marki
 Eine Demo-Kamera wird für eine reale SPS-Messkampagne abgelehnt.
 
 ## 1. Bauteil, Kandidat und Raster vorbereiten
+
+Über **Standardordner …** neben den Ladebuttons lassen sich getrennte Startordner
+für Roadmap und STL festlegen. Sie bleiben für den nächsten Programmstart
+gespeichert und gelten auch für **STL zuordnen**. Leere Felder setzen die jeweilige
+Vorgabe zurück. Ist ein gespeicherter Ordner nicht erreichbar, verwendet die
+Dateiauswahl den bisherigen Standardordner.
 
 1. Unter **Versuche aufnehmen → Bauteil und Raster** eine Roadmap auswählen,
    oder eine STL laden und im bestehenden Pose-Dialog Ausgangs-/Zielpose festlegen.
@@ -90,7 +97,27 @@ Bestätigung werden Aufnahmen gespeichert und zur Prüfung markiert.
    das nächste Bauteil zuführen. Die manuelle Rückführung richtet das Bauteil
    jedes Mal wieder in der Ausgangspose aus.
 
-Bewegungs- oder Hardwaretrigger werden in der Kamera-GUI eingestellt. Im
+Neue Kampagnen verwenden unter **Kamera und Kampagne → Durchlauferkennung**
+standardmäßig **Bauteil im Bild · ohne Hardwaretrigger**. Die Kamera zeichnet
+damit auch Durchläufe ohne Drehbewegung auf: bestätigtes Bauteil startet die Aufnahme,
+ein wieder freier Messbereich beendet sie nach der Ruhezeit. Die aktuelle
+Kamera-GUI muss diese API-Erweiterung unterstützen und nach einem Update neu
+gestartet werden. Nach jedem Versuch wird ihre vorherige Aufnahmekonfiguration
+wiederhergestellt. Der Messbereich muss zwischen zwei Bauteilen frei sein.
+
+**Bauteilbestätigung** verlangt bei neuen Kampagnen standardmäßig 100 ms
+(einstellbar 50–500 ms) mit mindestens drei aufeinanderfolgenden, gültigen Bildern:
+vollständig sichtbare Kontur und Bounding Box, gültiger Winkel, Qualitätswert
+mindestens 0,2, höchstens 5° Winkelspanne sowie Konturfläche und Boxseiten innerhalb
+±25 % des ersten Kandidatenbilds. Die Position darf sich mit dem Band bewegen.
+Ungültige Bilder oder Zeitlücken über 50 ms setzen die Bestätigung zurück.
+Kurze Handeingriffe lassen den Versuchsplatz scharf und erzeugen keinen Clip.
+Der Vorlaufpuffer umfasst mindestens Bestätigungsdauer plus 50 ms, damit die
+Ausgangspose erhalten bleibt. Eine länger passende sichtbare Hand wird dadurch
+nicht sicher als Hand erkannt; es gibt keinen STL-Bildabgleich.
+
+Alternativ gilt **Startmodus der Kamera-GUI verwenden**. Bewegungs- oder
+Hardwaretrigger werden dann in der Kamera-GUI eingestellt. Im
 manuellen Kameramodus ist zusätzlich **Manueller Kameratrigger** verfügbar.
 Der Kamera-/Messstand wird für die Kampagne festgehalten; Änderungen erfordern
 eine neue Kampagne. Livewerte dienen der Anzeige, die Klassifizierung verwendet
@@ -103,6 +130,19 @@ fordert über eine separate HTTP-Verbindung einen priorisierten SPS-Stopp an und
 pausiert die Versuche. Fenster schließen beendet Aufnahme und Sitzung.
 
 ## 3. Klassen und Messqualität
+
+Auf der **Durchführungsseite** stehen Ausgangs- und Zielpose direkt über den
+Versuchsaktionen. Bei laufenden und wiederaufgenommenen Kampagnen werden dafür
+die archivierte STL und die gespeicherten Kampagnenposen verwendet.
+
+**Kampagne abbrechen / löschen** pausiert zuerst den Versuch. Im Dialog kann man
+die Kampagne mit erhaltenen Daten abbrechen, nach Abschluss der Aufnahme und
+Archivierung ihren gesamten Kampagnenordner löschen oder nur pausieren.
+Beim endgültigen Abbruch wird die Sitzung beendet und der SPS-Bandstopp angefordert.
+Der Dialog nennt den genauen Datenordner; die Vorgabe erhält die Daten.
+Originalaufnahmen im Kamera-Repo und andere Kampagnen werden nicht gelöscht.
+Gelöscht werden nur Kampagnenordner, deren Name ihrer gespeicherten UUID entspricht;
+Verknüpfungen innerhalb eines Ordners verhindern das Löschen.
 
 Die Klassifizierung orientiert sich an der erreichten Enddrehung, nicht am
 größten Zwischenwinkel. Bei zunächst ±10° Toleranz gilt:
@@ -123,14 +163,75 @@ Die Bewegung muss vollständig und mit ausreichender Bildrate beobachtet werden;
 eine zwischen Bildern versteckte große Drehung kann aus der Achsmessung allein
 nicht ausgeschlossen werden. Das Verfahren bestätigt keine beliebige 3D-Pose.
 
-Messfehler, fehlende stabile Abschnitte und abgebrochene Aufnahmen werden mit
-Grund gespeichert und pausieren die Reihe. **Versuch wiederholen** erzeugt eine
-neue Kennung mit Verweis auf den vorherigen Versuch. **Ohne Ersatz fortsetzen**
-markiert den Versuchsplatz als übersprungen. Alle Versuche bleiben erhalten.
+Neue Kampagnen verwenden Auswertungsversion 2. Kurze innere Lücken werden nur in
+bestätigten Ruhephasen toleriert: höchstens 20 ms (und nicht über der eingestellten
+Zeitlückengrenze), höchstens zwei fehlende Bilder, davor und danach jeweils
+mindestens 50 ms lückenlose stabile Winkel und zusammen höchstens 5° Winkelspanne.
+Fehlende Winkel werden nicht interpoliert. Lücken während einer Drehung, größere
+Lücken und Zeitstempelrücksprünge bleiben prüfpflichtig. Ungültiger Vor-/Nachlauf
+außerhalb stabiler Messabschnitte wird nicht als unterbrochene Drehung gewertet;
+gültige, noch bewegte Randabschnitte werden nicht weggeschnitten.
+
+Ein Abbruch mit `memory_limit` kann trotz unverändertem Kamera-Fehlerstatus
+automatisch verwendbar sein: stabile Ausgangspose, durchgehend beobachtete
+Winkelbewegung über 5° und anschließend mindestens 200 ms lückenlose stabile
+Endpose bis zum letzten gespeicherten Bild. Höchstens das eine beim Abbruch
+verworfene Schlussbild darf fehlen. Flache abgeschnittene Messungen, andere
+Abbrüche, externe Stopps und Schreibfehler bleiben prüfpflichtig.
+Blockierende Gründe und tolerierte Hinweise werden getrennt gespeichert und in
+der Prüfung angezeigt; Exportfelder sind `quality_reasons`, `quality_warnings`
+und `evaluation_version`.
+
+Bestehende Kampagnen ohne Versionsangabe behalten Version 1 und den bisherigen
+Aufnahmestart. Sie werden nicht automatisch neu ausgewertet. Originalmessungen,
+Kamera-Abbruchgründe und manuelle Gut-/Schlecht-Entscheidungen bleiben erhalten.
+
+Unsichere Winkelauswertung, fehlende stabile Abschnitte und unvollständige
+Kameraaufnahmen werden mit Grund gespeichert und zur Wiederholung vorgemerkt.
+**Die laufende Versuchsreihe wird dadurch nicht pausiert:** Sie führt zunächst
+alle eingestellten Wiederholungen ihrer Druck-/Impulsdauer-Kombination aus.
+
+Unter **Kamera und Kampagne → Unsichere Versuche wiederholen** wählt man:
+
+- **Nach jeder Versuchsreihe anbieten** (Vorgabe): Nach der Reihe können deren
+  unsichere Versuche über **Unsichere Versuche wiederholen** nachgeholt werden.
+- **Am Kampagnenende gesammelt anbieten**: Alle regulären Reihen werden zuerst
+  abgearbeitet; danach werden die offenen unsicheren Versuche gemeinsam angeboten.
+
+**Vorerst ohne Wiederholung weiter** verschiebt die Wiederholung. Am Ende bleibt
+der Wiederholungsbutton verfügbar. Jede Wiederholungsrunde arbeitet die zu Beginn
+vorgemerkten Versuche genau einmal ab. Erneut unsichere Ergebnisse bleiben offen
+und können anschließend nochmals wiederholt werden; es gibt keine automatische
+Endlosschleife. Beim Wechsel zu einer anderen Druck-/Impulsdauer-Kombination
+bleibt die ausdrückliche Reihenfreigabe erforderlich. Offene Aufgaben und eine
+begonnene Wiederholungsrunde werden für die Wiederaufnahme gespeichert.
+
+Wiederholungen bekommen neue Kennungen und verweisen über `replaces_trial_id`
+auf die ursprüngliche Aufnahme; Rohdaten und alte Bewertungen bleiben erhalten.
+Eine manuelle Pause oder ein Verbindungs-, SPS- oder Speicherfehler unterbricht
+weiterhin den Ablauf. Nach einer manuellen Pause startet **Versuch wiederholen**
+den betroffenen Einzelversuch erneut; **Ohne Ersatz fortsetzen** markiert ihn als
+übersprungen.
 Nach Verbindungsverlust erneut verbinden und **Kampagne wiederaufnehmen** wählen;
 ohne erneute Reihenfreigabe beginnt keine Aufnahme.
 
 ## 4. Speicherung und Datenprüfung
+
+Neue Versuche verwenden standardmäßig **kompakte Prüfvideos**. Die Kamera schreibt
+genau ein MP4 (`mp4v`) direkt in den reservierten Versuchsordner. Es gibt weder
+unkomprimierte NPY-Einzelbilder noch eine zweite Kopie im Kamera-Repo. Der
+Messbereich wird für das Video auf höchstens 960 Pixel an der längsten Seite
+verkleinert; alle verarbeiteten Bilder bleiben enthalten. Winkelberechnung,
+Klassifizierung und Export verwenden die ursprünglichen Messwerte und Zeitstempel,
+nicht die komprimierten Videobilder. Die Video-Bildrate dient nur der Wiedergabe;
+die genaue Zuordnung erfolgt über Zeitstempel und Frameindex im Manifest.
+
+Die Videoaufzeichnung läuft bereits während des Durchlaufs im Hintergrund.
+Geschriebene Bilder werden sofort aus dem begrenzten RAM-Puffer entfernt.
+Encoderfehler werden separat gemeldet; Messwerte werden weiter protokolliert.
+Es erfolgt kein automatischer Rückfall auf große Rohbilddateien. Die Anzeige zeigt
+freien Speicher und eine ungefähre Kampagnengröße. Unter 1 GiB freiem Speicher
+wird kein weiterer Versuch gestartet; es werden keine Daten automatisch gelöscht.
 
 Standard: `data/experiments/<campaign_id>/`. Ein Kampagnenordner kann vollständig
 verschoben werden; interne Referenzen bleiben relativ.
@@ -142,8 +243,11 @@ assets/                      Kopien von STL, Roadmap und vorhandenem Consumer-Si
 trials/<trial_id>/
   trial.json                 Parameter, Rücklesen, Analyse, Status und Klassifizierung
   measurements.csv           Rohwinkel, fortgeführte Winkel, Qualität und Lückengründe
-  clip/manifest.json         Unverändertes Manifest der Kameraaufnahme
-  clip/*.npy                 Verlustlose Originalbilder der Kamera
+  capture-request.json       Reserviertes Aufnahmeziel mit Kampagnen-/Versuchskennung
+  clip/manifest.json         Kameraformat v2: Zeitstempel, Messwerte und Videometadaten
+  clip/review.mp4            Kompaktes Prüfvideo, nach Prüfung separat löschbar
+  clip/measurements.jsonl    Fortlaufend geschriebenes Messjournal zur Wiederherstellung
+  clip/capture.json          Metadaten für eine unterbrochene Aufnahme
   annotations.json           Versionierte manuelle Prüfentscheidungen
 ```
 
@@ -154,7 +258,7 @@ SPS-Sollwert sind getrennt. Jeder Versuch enthält angeforderte und zurückgeles
 Parameter. Kamerazeiten sind monotone Hostzeiten und werden nicht als
 synchronisierte SPS-Zeitbasis ausgegeben.
 
-Speicherung und Clipübernahme laufen außerhalb des Qt-Threads. Metadaten werden
+Speicherung und Abschluss laufen außerhalb des Qt-Threads. Metadaten werden
 atomar veröffentlicht; unvollständige Versuche und temporäre Aufnahmeordner
 werden nicht als abgeschlossen gewertet. Eine Wiederaufnahme prüft die
 archivierten Assets und die Kamera-Konfiguration. Bereits abgeschlossene oder
@@ -162,10 +266,58 @@ bewusst übersprungene Versuchsplätze werden nicht erneut ausgeführt.
 
 Unter **Daten prüfen** eine Kampagne öffnen oder die aktuelle Kampagne aus der
 Durchführung übernehmen. Die Tabelle lässt sich nach Klassen, Prüfbedarf oder
-Ausschluss filtern. Winkelkurve und Originalbilder sind über den Frame-Regler
+Ausschluss filtern. Winkelkurve und Prüfvideo sind über den Frame-Regler
 gemeinsam durchsuchbar. Eine Korrektur oder ein Ausschluss benötigt eine
 Begründung. Wiedereinschließen ist ebenfalls möglich. Ursprüngliche Messwerte
 und automatische Klassen bleiben unverändert.
+
+Rechts in jeder Versuchszeile stehen **Gut** und **Schlecht** für die Datenqualität.
+**Gut** gibt die Daten nach Sichtprüfung frei; fehlt eine Flipklasse, muss diese
+im Auswahldialog angegeben werden. **Schlecht** schließt den Versuch vom Training
+aus. Eine spätere Freigabe ist mit **Gut** möglich. Beide Aktionen speichern eine
+Prüfentscheidung mit Begründung; Originalmesswerte und automatische Auswertung
+bleiben erhalten. **Gut** bedeutet verwendbare Daten und kann auch die Flipklasse
+`not_flipped` haben. Die Spalte **Grund** erläutert die automatische Unsicherheit
+und zeigt etwa bei `memory_limit`, dass der Aufnahmepuffer voll war.
+
+Wiederholtes Bestätigen derselben Bewertung mit unveränderter Klasse und
+Begründung erzeugt keinen zusätzlichen Historieneintrag. Beim Wechsel zwischen
+**Gut** und **Schlecht** bleibt nur der aktuelle Standardtext in der Begründung;
+eigene Notizen und die Historie früherer Entscheidungen bleiben erhalten.
+Bereits angehäufte Standardtexte alter Prüfungen werden in Anzeige und Export
+zusammengefasst.
+
+**Alle automatisch gültigen bestätigen** bestätigt alle noch ungeprüften Versuche
+mit gültiger automatischer Auswertung und Flipklasse in der geöffneten Kampagne.
+Der Tabellenfilter begrenzt diese Sammelaktion nicht. Bereits manuell korrigierte,
+bestätigte oder ausgeschlossene Versuche werden übersprungen. Wiederholtes Klicken
+erzeugt keine doppelten Bestätigungen; Originalmesswerte und automatische
+Auswertungen bleiben unverändert.
+
+Gespeicherte Entscheidungen **Gut** oder **Schlecht** nehmen den jeweiligen
+unsicheren Versuch aus der Wiederholungsliste. Anzahl und Freigabestatus in der
+Durchführung werden direkt aktualisiert, auch bei bereits bestehenden Kampagnen.
+Eine Prüfung mit Klasse **Zu prüfen** ohne Ausschluss bleibt offen. Bereits
+vorgemerkte Wiederholungen werden vor dem Start erneut geprüft und beim
+Wiederaufnehmen einer Kampagne bereinigt. Ein laufender Versuch wird durch die
+Prüfung nicht unterbrochen. Eine neue Druck-/Impulsdauer-Kombination benötigt
+weiterhin ihre eigene Freigabe.
+
+Nach einer gespeicherten Prüfung kann **Prüfvideo löschen** das ausgewählte Video
+entfernen. **Geprüfte Videos dieser Kampagne löschen** entfernt die Videos aller
+bereits geprüften Versuche. Die Bestätigung zeigt Anzahl, Speicherbedarf und
+Kampagnenordner. Messwerte, Klassifizierung, Geometrie, Prüfentscheidungen und
+Trainingsdaten bleiben erhalten; Winkelkurven und CSV-Export funktionieren weiter.
+Eine fehlgeschlagene Löschung wird angezeigt und kann erneut versucht werden.
+
+Vorhandene Aufnahmen im Kameraformat v1 mit NPY-Einzelbildern bleiben lesbar und
+werden weder konvertiert noch durch die Video-Löschbuttons entfernt. Neue
+Kampagnen benötigen die aktualisierte Kamera-GUI mit den Fähigkeiten
+`review_video_v1` und `direct_trial_output`. Beide Programme nach dem Update neu
+starten. Bei einem unterbrochenen Schreibvorgang wird beim Wiederaufnehmen der
+Kampagne das Messjournal wiederhergestellt und der Versuch als abgebrochen
+markiert. Kurzzeitige Windows-Dateisperren beim Abschluss werden erneut versucht;
+bei anhaltender Sperre bleibt die Aufnahme im lesbaren Ordner `clip.tmp` erhalten.
 
 **CSV exportieren** erzeugt eine Zeile pro Versuch, einschließlich
 Ausschluss-/Prüfstatus. `input_*` bezeichnet Versuchsparameter, `feature_*`
@@ -198,9 +350,10 @@ Merkmalssätze und Zielwertregeln verfügbar.
 ```powershell
 ./.venv/Scripts/python.exe -m pytest -q tests/test_experiments.py tests/test_experiments_gui.py
 ./.venv/Scripts/python.exe -m pytest -q tests/test_experiments_faults.py
+./.venv/Scripts/python.exe -m pytest -q tests/test_compact_experiments.py
 ./.venv/Scripts/python.exe -m ruff check src/bibazu_autotune/experiments
 ```
 
 Die Tests verwenden Simulationen und berühren keine reale Anlage. Vor der ersten
 Messkampagne ein kleines Raster mit mehreren Wiederholungen an der Anlage
-aufnehmen und die Klassen anhand der Originalbilder prüfen.
+aufnehmen und die Klassen anhand der Prüfvideos prüfen.

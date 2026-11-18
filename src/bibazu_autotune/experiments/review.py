@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 
 import numpy as np
-from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtCore import QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -27,8 +28,48 @@ from PyQt6.QtWidgets import (
 )
 
 from .dataset import DatasetReader
-from .models import LABELS
+from .models import AUTOMATIC_REVIEW_REASON, LABELS, current_review_reason
 from .storage import CampaignStore, inside, read_json
+from .video import VideoFrames
+
+
+def quality_explanation(row):
+    reasons = {
+        "capture_incomplete": "Aufnahme unvollständig",
+        "dropped_frames": "Bilder im Aufnahmepuffer verworfen",
+        "observability_not_confirmed": "Sichtbarkeit der Drehung nicht bestätigt",
+        "no_valid_angles": "Keine gültigen Winkel erkannt",
+        "no_stable_initial_pose": "Keine stabile Ausgangspose erkannt",
+        "no_stable_final_pose": "Keine stabile Endpose erkannt",
+        "interrupted_rotation": "Winkelverfolgung unterbrochen (Mess- oder Bildlücke)",
+        "insufficient_observation": "Zu kurze Beobachtung zwischen Ausgangs- und Endpose",
+    }
+    messages = [reasons.get(code, code) for code in row["quality_reasons"].split(";") if code]
+    warnings = {
+        "rest_gap_bridged": "Kurze Messlücke in bestätigter Ruhephase toleriert",
+        "unusable_prefix_ignored": "Unbrauchbaren Vorlauf außerhalb der Auswertung belassen",
+        "unusable_suffix_ignored": "Unbrauchbaren Nachlauf außerhalb der Auswertung belassen",
+        "memory_limit_after_stable_final_pose": (
+            "Speicherabbruch nach beobachteter Bewegung und stabiler Endpose toleriert"
+        ),
+    }
+    messages.extend(
+        "Hinweis: " + warnings.get(code, code)
+        for code in row.get("quality_warnings", "").split(";")
+        if code
+    )
+    stop = row.get("stop_reason")
+    if stop and stop != "part_left":
+        messages.append(
+            "Aufnahmeende: "
+            + {
+                "memory_limit": "Aufnahmepuffer voll",
+                "max_duration": "Maximale Aufnahmedauer erreicht",
+                "write_error": "Schreibfehler",
+                "no_motion_timeout": "Zeitlimit ohne Bewegung erreicht",
+            }.get(stop, stop)
+        )
+    return "; ".join(messages)
 
 
 class AngleCurve(QWidget):
@@ -91,12 +132,16 @@ class AngleCurve(QWidget):
 
 
 class ReviewPage(QWidget):
+    storage_changed = pyqtSignal(str)
+    review_changed = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.store = None
         self.records = []
         self.frames = []
         self.frame_directory = None
+        self.video_frames = None
         root = QVBoxLayout(self)
         actions = QHBoxLayout()
         for title, callback in (
@@ -112,10 +157,26 @@ class ReviewPage(QWidget):
         self.filter.currentTextChanged.connect(self.refresh)
         actions.addWidget(self.filter)
         root.addLayout(actions)
+        self.confirm_automatic_button = QPushButton("Alle automatisch gültigen bestätigen")
+        self.confirm_automatic_button.setToolTip(
+            "Alle noch ungeprüften, automatisch gültigen Versuche dieser Kampagne bestätigen. "
+            "Vorhandene manuelle Entscheidungen bleiben erhalten; Tabellenfilter gelten hier nicht."
+        )
+        self.confirm_automatic_button.setEnabled(False)
+        self.confirm_automatic_button.clicked.connect(self.confirm_automatic)
+        root.addWidget(self.confirm_automatic_button)
+        media_actions = QHBoxLayout()
+        self.delete_video_button = QPushButton("Prüfvideo löschen")
+        self.delete_all_videos_button = QPushButton("Geprüfte Videos dieser Kampagne löschen")
+        self.delete_video_button.clicked.connect(lambda: self.delete_videos(False))
+        self.delete_all_videos_button.clicked.connect(lambda: self.delete_videos(True))
+        media_actions.addWidget(self.delete_video_button)
+        media_actions.addWidget(self.delete_all_videos_button)
+        root.addLayout(media_actions)
         self.path_label = QLabel("Noch keine Kampagne geöffnet.")
         self.path_label.setWordWrap(True)
         root.addWidget(self.path_label)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
             [
                 "Versuch",
@@ -126,12 +187,14 @@ class ReviewPage(QWidget):
                 "Qualität",
                 "Ausgeschlossen",
                 "Grund",
+                "Prüfung",
             ]
         )
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         self.table.itemSelectionChanged.connect(self.select)
         root.addWidget(self.table, 1)
         split = QSplitter()
@@ -179,7 +242,12 @@ class ReviewPage(QWidget):
         if self.store is None:
             return
         try:
+            selected = self.selected()
+            selected_id = selected["trial_id"] if selected else None
             rows = list(DatasetReader([self.store]).rows(include_excluded=True))
+            self.confirm_automatic_button.setEnabled(
+                any(self.automatic_candidate(row) for row in rows)
+            )
             wanted = self.filter.currentText()
             self.records = [
                 row
@@ -187,6 +255,7 @@ class ReviewPage(QWidget):
                 if wanted == "Alle Versuche"
                 or (
                     wanted == "Zu prüfen"
+                    and not row["excluded"]
                     and (
                         row["label"] is None or (row["quality"] != "valid" and not row["reviewed"])
                     )
@@ -203,17 +272,49 @@ class ReviewPage(QWidget):
                     row["input_pressure_mbar"],
                     row["input_pulse_duration_ms"],
                     row["label"] or "Zu prüfen",
-                    row["quality"],
+                    ("Schlecht" if row["excluded"] else "Gut")
+                    if row["reviewed"] and (row["excluded"] or row["label"] is not None)
+                    else "Automatisch gültig"
+                    if row["quality"] == "valid"
+                    else "Zu prüfen",
                     "Ja" if row["excluded"] else "Nein",
-                    row["review_reason"] or row["quality_reasons"],
+                    row["review_reason"] or quality_explanation(row),
                 ]
                 for column, value in enumerate(values):
                     item = QTableWidgetItem(str(value))
                     item.setToolTip(str(value))
                     self.table.setItem(index, column, item)
+                actions = QWidget()
+                buttons = QHBoxLayout(actions)
+                buttons.setContentsMargins(2, 0, 2, 0)
+                for good, title in ((True, "Gut"), (False, "Schlecht")):
+                    action = QPushButton(title)
+                    action.setToolTip(
+                        "Daten nach Sichtprüfung freigeben; Flipklasse bleibt separat."
+                        if good
+                        else "Fehlerhafte Daten vom Training ausschließen."
+                    )
+                    action.setCheckable(True)
+                    action.setChecked(
+                        row["reviewed"]
+                        and (row["excluded"] or row["label"] is not None)
+                        and row["excluded"] != good
+                    )
+                    color = "#bbf7d0" if good else "#fecaca"
+                    action.setStyleSheet(f"QPushButton:checked {{ background: {color}; }}")
+                    action.clicked.connect(
+                        lambda checked=False, trial_id=row["trial_id"], good=good: (
+                            self.quick_review(trial_id, good)
+                        )
+                    )
+                    buttons.addWidget(action)
+                self.table.setCellWidget(index, 8, actions)
             self.table.blockSignals(False)
             if self.records:
-                self.table.selectRow(0)
+                index = next(
+                    (i for i, row in enumerate(self.records) if row["trial_id"] == selected_id), 0
+                )
+                self.table.selectRow(index)
             self.select()
         except (OSError, ValueError, KeyError) as exc:
             QMessageBox.warning(self, "Datenprüfung", str(exc))
@@ -223,12 +324,20 @@ class ReviewPage(QWidget):
         return self.records[index] if 0 <= index < len(self.records) else None
 
     def select(self):
+        if self.store is None:
+            self.confirm_automatic_button.setEnabled(False)
+        if self.video_frames is not None:
+            self.video_frames.close()
+        self.video_frames = None
         self.frames = []
         self.slider.setEnabled(False)
         self.image_label.clear()
         self.curve.set_rows([])
         self.details.clear()
         self.frame_label.clear()
+        self.delete_video_button.setEnabled(False)
+        candidates = self.store.reviewed_videos() if self.store else []
+        self.delete_all_videos_button.setEnabled(bool(candidates))
         row = self.selected()
         self.save.setEnabled(row is not None)
         if row is None:
@@ -237,6 +346,9 @@ class ReviewPage(QWidget):
         self.excluded.setChecked(row["excluded"])
         self.reason.setText(row["review_reason"])
         directory = self.store.trial_directory(row["trial_id"])
+        self.delete_video_button.setEnabled(
+            any(v["trial_id"] == row["trial_id"] for v in candidates)
+        )
         try:
             path = directory / "measurements.csv"
             if path.exists():
@@ -255,11 +367,22 @@ class ReviewPage(QWidget):
                 f"Status: {record['status']} · Auflösung: {record.get('resolution') or 'offen'} · "
                 f"Enddrehung: {row['outcome_rotation_deg']}° · "
                 f"Maximaldrehung: {row['outcome_max_rotation_deg']}° · "
-                + (record.get("error") or row["quality_reasons"])
+                + (record.get("error") or quality_explanation(row))
             )
             if record.get("clip"):
                 self.frame_directory = inside(directory, record["clip"])
-                self.frames = read_json(self.frame_directory / "manifest.json")["frames"]
+                manifest = read_json(self.frame_directory / "manifest.json")
+                self.frames = manifest["frames"]
+                if manifest.get("schema_version") == 2:
+                    self.video_frames = VideoFrames(self.frame_directory, manifest)
+                    if not len(self.video_frames):
+                        self.image_label.setText(
+                            "Prüfvideo gelöscht"
+                            if manifest["media"]["state"] in {"deleted", "deleting"}
+                            else "Prüfvideo nicht verfügbar: "
+                            + (manifest["media"].get("error") or "")
+                        )
+                        return
                 self.slider.setRange(0, max(0, len(self.frames) - 1))
                 self.slider.setEnabled(bool(self.frames))
                 self.slider.setValue(0)
@@ -272,7 +395,11 @@ class ReviewPage(QWidget):
             return
         frame = self.frames[index]
         try:
-            data = np.load(inside(self.frame_directory, frame["file"]), allow_pickle=False)
+            data = (
+                self.video_frames[index]
+                if self.video_frames is not None
+                else np.load(inside(self.frame_directory, frame["file"]), allow_pickle=False)
+            )
             if data.dtype != np.uint8 or data.ndim not in (2, 3):
                 raise ValueError("Vorschau unterstützt Mono8 und BGR8.")
             data = np.ascontiguousarray(data)
@@ -299,6 +426,34 @@ class ReviewPage(QWidget):
         except (OSError, ValueError, KeyError) as exc:
             self.image_label.setText(str(exc))
 
+    def quick_review(self, trial_id, good):
+        index = next((i for i, row in enumerate(self.records) if row["trial_id"] == trial_id), None)
+        if index is None:
+            return
+        self.table.selectRow(index)
+        row = self.records[index]
+        label = row["label"]
+        if good and label is None:
+            label, accepted = QInputDialog.getItem(
+                self,
+                "Gute Daten: Flipklasse festlegen",
+                "Welche Flipklasse ist im Prüfvideo zu sehen?",
+                list(LABELS),
+                0,
+                False,
+            )
+            if not accepted:
+                self.refresh()
+                return
+        reason = current_review_reason(row["review_reason"], not good, quick=True)
+        try:
+            self.store.annotate(trial_id, label, not good, reason)
+            self.refresh()
+            self.review_changed.emit(str(self.store.directory))
+        except (OSError, ValueError) as exc:
+            self.refresh()
+            QMessageBox.warning(self, "Datenprüfung", str(exc))
+
     def annotate(self):
         row = self.selected()
         if row is None:
@@ -312,8 +467,82 @@ class ReviewPage(QWidget):
                 self.reason.text(),
             )
             self.refresh()
+            self.review_changed.emit(str(self.store.directory))
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Datenprüfung", str(exc))
+
+    @staticmethod
+    def automatic_candidate(row):
+        return (
+            row["quality"] == "valid"
+            and row["automatic_label"] in LABELS
+            and not row["reviewed"]
+            and not row["excluded"]
+        )
+
+    def confirm_automatic(self):
+        if self.store is None:
+            return
+        confirmed, errors = 0, []
+        try:
+            rows = list(DatasetReader([self.store]).rows(include_excluded=True))
+            for row in rows:
+                if not self.automatic_candidate(row):
+                    continue
+                try:
+                    if self.store.annotation(row["trial_id"]) is not None:
+                        continue
+                    self.store.annotate(
+                        row["trial_id"],
+                        row["automatic_label"],
+                        False,
+                        AUTOMATIC_REVIEW_REASON,
+                    )
+                    confirmed += 1
+                except (OSError, ValueError) as exc:
+                    errors.append(f"{row['trial_id'][:10]}: {exc}")
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(str(exc))
+        self.refresh()
+        if confirmed:
+            self.review_changed.emit(str(self.store.directory))
+            self.details.setText(f"{confirmed} automatisch gültige Versuche bestätigt.")
+        if errors:
+            QMessageBox.warning(self, "Bestätigung nicht vollständig", "\n".join(errors))
+
+    def delete_videos(self, all_reviewed):
+        if self.store is None:
+            return
+        row = self.selected()
+        candidates = self.store.reviewed_videos()
+        if not all_reviewed:
+            candidates = [v for v in candidates if row and v["trial_id"] == row["trial_id"]]
+        if not candidates:
+            return
+        size = sum(v["bytes"] for v in candidates)
+        answer = QMessageBox.question(
+            self,
+            "Geprüfte Videos löschen",
+            f"{len(candidates)} geprüfte Videos ({size / 1024**2:.2f} MiB) löschen?\n"
+            f"Kampagne: {self.store.directory}\n"
+            "Messwerte, Klassen, Prüfentscheidungen und alte Originalbilder bleiben erhalten.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self.video_frames is not None:
+            self.video_frames.close()
+        errors = []
+        for video in candidates:
+            try:
+                self.store.delete_review_video(video["trial_id"])
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
+        self.refresh()
+        self.storage_changed.emit(str(self.store.directory))
+        if errors:
+            QMessageBox.warning(self, "Videolöschung nicht vollständig", "\n".join(errors))
 
     def export(self):
         if self.store is None:

@@ -135,6 +135,11 @@ class ParameterEditor(QWidget):
         for index in range(4):
             self.table.setItem(index, 0, QTableWidgetItem(str(index + 1)))
             enabled, mode = QCheckBox(), QCheckBox()
+            mode.setToolTip(
+                "An: SPS berechnet den Offset-Zeitpunkt mit der Bandsollgeschwindigkeit. "
+                "Aus: Geschwindigkeit aus der Lichtschrankenmessung. "
+                "Der Offset bleibt in beiden Fällen wirksam."
+            )
             nozzle_widget = QWidget()
             nozzle_layout = QHBoxLayout(nozzle_widget)
             nozzle_layout.setContentsMargins(2, 0, 2, 0)
@@ -152,6 +157,11 @@ class ParameterEditor(QWidget):
                 control.setRange(low, high)
                 if kind is float:
                     control.setDecimals(1)
+                if field == "offset_mm":
+                    control.setToolTip(
+                        "0 mm: Mitte der Referenzdüse an der Bauteilvorderkante. "
+                        "Größere Werte lösen später aus und treffen weiter hinten."
+                    )
                 row[field] = control
                 self.table.setCellWidget(index, column, control)
             self.table.setCellWidget(index, 7, mode)

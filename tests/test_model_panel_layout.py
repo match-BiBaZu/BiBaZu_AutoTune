@@ -35,9 +35,16 @@ def test_parameter_sections_show_their_controls_without_changing_values(offline_
             panel.fields[name][0]
             for name in ("diameter_m", "pitch_m", "distance_m", "spread_angle_deg")
         ],
-        "hits": [
+        "hits": [panel.offset_strategy]
+        + [
             panel.fields[name][0]
-            for name in ("margin_m", "offset_safety_m", "half_hit_lower", "half_hit_upper")
+            for name in (
+                "margin_m",
+                "offset_safety_m",
+                "offset_inset_fraction",
+                "half_hit_lower",
+                "half_hit_upper",
+            )
         ],
         "pressure": [
             panel.fields[name][0]

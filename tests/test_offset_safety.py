@@ -42,8 +42,8 @@ def test_offset_reserve_moves_force_inward_for_either_side(tmp_path, axis, angle
         assert abs(point[0]) == pytest.approx(abs(old_point[0]) - 0.005, abs=1e-7)
         assert point[1:] == old_point[1:]  # Transverse coverage is unchanged.
     if axis == "z" and angle < 0:
-        assert old.offset_m * 1000 == pytest.approx(79, abs=1e-4)
-        assert new.offset_m * 1000 == pytest.approx(74, abs=1e-4)
+        assert old.offset_m * 1000 == pytest.approx(79 - config.jet_radius_m * 1000, abs=1e-4)
+        assert new.offset_m * 1000 == pytest.approx(74 - config.jet_radius_m * 1000, abs=1e-4)
 
 
 def test_offset_reserve_respects_holes_and_rejects_short_surface_intervals():
@@ -55,7 +55,7 @@ def test_offset_reserve_respects_holes_and_rejects_short_surface_intervals():
 
 def test_short_part_is_blocked_if_reserve_does_not_fit(tmp_path):
     analysis = analyze_stl(write_box(tmp_path / "short.stl"), density=1200)
-    config = ModelConfiguration(uphill_deg=0, cross_slope_deg=0)
+    config = ModelConfiguration(uphill_deg=0, cross_slope_deg=0, offset_strategy="fixed")
     config = replace(config, mounts=tuple(replace(m, row_center_m=0.015) for m in config.mounts))
     result = AnalyticalModel().evaluate(analysis, pose(), parameters(), config)
     assert len(result) == 2

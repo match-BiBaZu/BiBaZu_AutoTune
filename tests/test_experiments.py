@@ -49,6 +49,7 @@ def plan_assets(tmp_path):
         repetitions=2,
         settling_seconds=0.5,
         snapshot={"mesh_sha256": digest},
+        storage_profile="legacy_npy",
     )
     return plan, {"mesh": mesh}
 
@@ -248,7 +249,7 @@ def test_confirm_each_combination_automatic_repetitions_and_separate_belt(experi
     assert not any(a["enabled"] for a in pressure.parameters["arrays"])
 
 
-def test_quality_failure_pauses_retry_has_new_identity_and_skip_resolves(experiment):
+def test_uncertain_trials_do_not_pause_series_and_batch_retry_is_finite(experiment):
     runner, pressure, vision, clock, until, events = experiment
     original = runner.store.plan
     runner.store.plan = replace(
@@ -257,18 +258,21 @@ def test_quality_failure_pauses_retry_has_new_identity_and_skip_resolves(experim
     runner.confirm()
     until("waiting")
     runner.conveyor(True)
-    until("paused")
-    first = runner.record["trial_id"]
-    assert runner.slot == 0
+    until("review_pending")
+    originals = runner.store.trials()
+    assert len(originals) == 2 and runner.slot == 2
+    assert all(r["resolution"] == "uncertain" for r in originals)
+    assert "paused" not in [value for name, value in events if name == "state"]
     assert not any(a["enabled"] for a in pressure.parameters["arrays"])
-    runner.retry()
-    until("paused")
-    assert runner.record["trial_id"] != first
-    assert runner.record["replaces_trial_id"] == first
-    runner.skip()
-    assert runner.slot == 1 and runner.state == "gate"
-    assert runner.store.next_slot() == 1
-    assert len(runner.store.trials()) == 2
+    runner.repeat_uncertain()
+    until("review_pending")
+    records = runner.store.trials()
+    assert len(records) == 4
+    assert {r["replaces_trial_id"] for r in records[2:]} == {r["trial_id"] for r in originals}
+    assert len(runner.store.pending_repeats()) == 2
+    runner.defer_uncertain()
+    assert runner.slot == 2 and runner.state == "gate"
+    assert runner.store.next_slot() == 2
 
 
 def test_pause_before_camera_arm_never_creates_camera_trial(experiment):
@@ -370,3 +374,29 @@ def test_interrupted_attempts_remain_and_do_not_resolve_slot(plan_assets, tmp_pa
     store.interrupt_unfinished()
     assert store.trials()[0]["status"] == "interrupted"
     assert store.next_slot() == 0
+
+
+def test_eight_unrotated_passages_are_eight_not_flipped_trials(experiment, plan_assets, tmp_path):
+    runner, pressure, vision, clock, until, events = experiment
+    runner.end_campaign(False, runner.store.directory)
+    runner.connect()
+    until("ready")
+    plan, assets = plan_assets
+    plan = replace(
+        plan,
+        pressure=SweepRange(0, 0, 100),
+        pulse=SweepRange(50, 50, 10),
+        repetitions=8,
+        settling_seconds=0,
+    )
+    runner.create(tmp_path / "zero-rotation", plan, assets, {})
+    until("gate")
+    runner.confirm()
+    until("waiting")
+    runner.conveyor(True)
+    until("complete", limit=30000)
+    records = runner.store.trials()
+    assert len(records) == 8 and runner.slot == 8
+    assert len({r["trial_id"] for r in records}) == 8
+    assert all(r["evaluation"]["label"] == "not_flipped" for r in records)
+    assert all(r["resolution"] == "accepted" for r in records)

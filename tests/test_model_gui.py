@@ -43,6 +43,7 @@ def prepare(window, wait, tmp_path, axis="y", angle=90):
     panel.fields["pitch_m"][0].setValue((24 - 0.7) / 7)
     panel.fields["spread_angle_deg"][0].setValue(0)
     panel.fields["offset_safety_m"][0].setValue(0)
+    panel.offset_strategy.setCurrentIndex(panel.offset_strategy.findData("fixed"))
     panel.fields["uphill_deg"][0].setValue(0)
     panel.fields["cross_slope_deg"][0].setValue(0)
     for mount, _, _, center in panel.mount_rows:

@@ -10,6 +10,22 @@ from ..recipes import validate_parameters
 from ..trial_context import validate_context
 
 LABELS = ("not_flipped", "flipped", "overflipped")
+GOOD_REVIEW_REASON = "Nach Sichtprüfung als gut freigegeben"
+BAD_REVIEW_REASON = "Als schlechte Daten ausgeschlossen"
+AUTOMATIC_REVIEW_REASON = "Automatisch gültige Auswertung gesammelt bestätigt"
+
+
+def current_review_reason(reason, excluded, *, quick=False):
+    """Keep custom notes and only the current generated decision, including legacy chains."""
+    parts = [part.strip() for part in reason.split(";") if part.strip()]
+    if not quick and not any(part in (GOOD_REVIEW_REASON, BAD_REVIEW_REASON) for part in parts):
+        return reason.strip()
+    notes = [
+        part
+        for part in parts
+        if part not in (GOOD_REVIEW_REASON, BAD_REVIEW_REASON, AUTOMATIC_REVIEW_REASON)
+    ]
+    return "; ".join([*notes, BAD_REVIEW_REASON if excluded else GOOD_REVIEW_REASON])
 
 
 def finite(value, name, low, high):
@@ -45,8 +61,11 @@ class ClassificationConfig:
     stable_span_deg: float = 5.0
     max_gap_seconds: float = 0.1
     observable_confirmed: bool = False
+    algorithm_version: int = 2
 
     def validate(self):
+        if type(self.algorithm_version) is not int or self.algorithm_version not in (1, 2):
+            raise ValueError("Unbekannte Auswertungsversion.")
         finite(self.target_angle_deg, "Zieldrehung", 0.001, 360)
         finite(self.tolerance_deg, "Zieltoleranz", 0.001, 90)
         finite(self.stable_seconds, "Stabilitätsdauer", 0.001, 10)
@@ -77,8 +96,20 @@ class ExperimentPlan:
     settling_seconds: float = 5.0
     trial_timeout_seconds: float = 60.0
     snapshot: dict = field(default_factory=dict)
+    capture_start_mode: str | None = "presence"
+    uncertain_repeat_timing: str = "series_end"
+    storage_profile: str = "review_video_v1"
+    presence_confirm_seconds: float | None = 0.1
 
     def validate(self):
+        if self.presence_confirm_seconds is not None:
+            finite(self.presence_confirm_seconds, "Bauteilbestätigung", 0.05, 0.5)
+        if self.storage_profile not in {"review_video_v1", "legacy_npy"}:
+            raise ValueError("Unbekanntes Aufnahmeformat.")
+        if self.uncertain_repeat_timing not in {"series_end", "campaign_end"}:
+            raise ValueError("Ungültiger Zeitpunkt für unsichere Wiederholungen.")
+        if self.capture_start_mode not in {None, "presence", "motion", "hardware", "manual"}:
+            raise ValueError("Unbekannter Kamera-Startmodus.")
         validate_context(self.context)
         parameters = validate_parameters(self.parameters)
         if type(self.array_index) is not int or self.array_index not in range(1, 5):
@@ -124,6 +155,9 @@ class ExperimentPlan:
     @classmethod
     def from_dict(cls, value):
         value = copy.deepcopy(value)
+        value.setdefault("capture_start_mode", None)  # Preserve legacy campaign trigger semantics.
+        value.setdefault("presence_confirm_seconds", None)
+        value["classification"].setdefault("algorithm_version", 1)
         value["pressure"] = SweepRange(**value["pressure"])
         value["pulse"] = SweepRange(**value["pulse"])
         value["classification"] = ClassificationConfig(**value["classification"])

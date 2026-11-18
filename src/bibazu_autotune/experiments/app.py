@@ -15,13 +15,14 @@ from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 
-from PyQt6.QtCore import QEvent, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QSettings, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -51,7 +52,7 @@ from ..clients import PressureClient, VisionClient
 from ..model_results import CalculationResultsWidget
 from ..pose_dialog import PartPoseDialog
 from ..pose_preview import render_mesh_preview
-from ..preparation import AutotuneSettingsPage
+from ..preparation import AutotuneSettingsPage, GeometryWorker
 from ..pressure_scaling import scale_pressure
 from ..profiles import empty_parameters
 from ..roadmap_transition_dialog import (
@@ -65,6 +66,7 @@ from .dataset import MODEL_FAMILIES, TASKS, DatasetReader
 from .models import ClassificationConfig, ExperimentPlan, SweepRange
 from .review import AngleCurve, ReviewPage
 from .runner import ExperimentRunner
+from .storage import CampaignStore, inside
 
 STATES = {
     "disconnected": "Nicht verbunden",
@@ -81,6 +83,8 @@ STATES = {
     "disabling": "Versuchsarray deaktivieren …",
     "paused": "Pausiert · Versuch prüfen",
     "complete": "Kampagne abgeschlossen · Arrays aus",
+    "stopping": "Bandstopp läuft · Parameterübertragung wartet …",
+    "review_pending": "Reihe beendet · unsichere Versuche zur Wiederholung vorgemerkt",
 }
 
 
@@ -109,6 +113,7 @@ class AcquisitionWorker(QThread):
         self.commands = queue.PriorityQueue()
         self.sequence = itertools.count()
         self.cancel = threading.Event()
+        self.external_stop = threading.Event()
         self.stopping = threading.Event()
         self.generation = 0
         self.session_id = None
@@ -133,8 +138,10 @@ class AcquisitionWorker(QThread):
             else:
                 pressure, vision = PressureClient(self.pressure_url), VisionClient(self.vision_url)
             runner = ExperimentRunner(pressure, vision, self.event.emit)
+            runner.external_stop = self.external_stop.is_set
             closing_started = None
             releasing = False
+            ending = None
             while True:
                 try:
                     _, _, generation, name, arguments = self.commands.get(timeout=0.1)
@@ -149,7 +156,14 @@ class AcquisitionWorker(QThread):
                             closing_started = time.monotonic()
                             runner.pause()
                         name = None
-                        if runner.state in {"paused", "ready", "gate", "complete", "disconnected"}:
+                        if runner.state in {
+                            "paused",
+                            "ready",
+                            "gate",
+                            "complete",
+                            "review_pending",
+                            "disconnected",
+                        }:
                             break
                         if time.monotonic() - closing_started > 20:
                             break
@@ -161,20 +175,40 @@ class AcquisitionWorker(QThread):
                         elif name == "release":
                             releasing = True
                             runner.pause()
+                        elif name == "end_campaign":
+                            ending = arguments
+                            runner.pause()
                         else:
                             getattr(runner, name)(*arguments)
                     runner.tick()
+                    if (
+                        ending
+                        and runner.state
+                        in {
+                            "paused",
+                            "ready",
+                            "gate",
+                            "complete",
+                            "review_pending",
+                            "disconnected",
+                        }
+                        and not (runner.operation or runner.motor_operation or runner.archive)
+                    ):
+                        arguments, ending = ending, None
+                        runner.end_campaign(*arguments)
                     if releasing and runner.state in {
                         "paused",
                         "ready",
                         "gate",
                         "complete",
+                        "review_pending",
                         "disconnected",
                     }:
                         runner.release()
                         releasing = False
                     self.session_id = pressure.session_id
                 except Exception as exc:
+                    ending = None
                     runner.fail(exc)
         except Exception as exc:
             self.event.emit("error", str(exc))
@@ -225,9 +259,11 @@ class TrainingWindow(QMainWindow):
         self.resize(1450, 950)
         self.state = "disconnected"
         self.command_pending = False
+        self.ending_campaign = False
         self.motor_pending = False
         self.can_skip = False
         self.camera_manual = False
+        self.capture_mode = None
         self.candidate = None
         self.campaign_path = None
         self.roadmap_path = None
@@ -235,6 +271,11 @@ class TrainingWindow(QMainWindow):
         self.band_worker = None
         self.active_dialog = None
         self.live_rows = []
+        self.run_context = None
+        self.pose_generation = 0
+        self.pose_worker = GeometryWorker(self)
+        self.pose_worker.completed.connect(self.accept_run_analysis)
+        self.pose_worker.finished.connect(self.finish_close)
         self.pressure_url = pressure_url
         self.editor = ParameterEditor()
         parameters = empty_parameters()
@@ -258,6 +299,8 @@ class TrainingWindow(QMainWindow):
         self.status.setStyleSheet("font-size:18px;font-weight:bold;padding:10px;background:#e2e8f0")
         layout.addWidget(self.status)
         self.pages = QTabWidget()
+        self.storage_label = QLabel("Speicher: kompakte Prüfvideos · Mindestreserve 1 GiB")
+        layout.addWidget(self.storage_label)
         layout.addWidget(self.pages, 1)
         acquisition = QWidget()
         self.pages.addTab(acquisition, "Versuche aufnehmen")
@@ -274,6 +317,7 @@ class TrainingWindow(QMainWindow):
         button(sources, "STL laden", self.load_stl)
         button(sources, "Posen bearbeiten", self.edit_poses)
         button(sources, "STL zuordnen", self.assign_mesh)
+        button(sources, "Standardordner …", self.configure_source_folders)
         pl.addLayout(sources)
         self.context_label = QLabel("Roadmap oder STL auswählen.")
         self.context_label.setWordWrap(True)
@@ -309,6 +353,25 @@ class TrainingWindow(QMainWindow):
         scroll.setWidget(raster)
         self.setup.addTab(scroll, "2 · Kamera und Kampagne")
         form = QFormLayout(raster)
+        self.capture_start_mode = QComboBox()
+        self.capture_start_mode.addItem("Bauteil im Bild · ohne Hardwaretrigger", "presence")
+        self.capture_start_mode.addItem("Startmodus der Kamera-GUI verwenden", None)
+        form.addRow("Durchlauferkennung", self.capture_start_mode)
+        self.presence_confirm_ms = spin(50, 500, 100)
+        self.presence_confirm_ms.setSuffix(" ms")
+        self.presence_confirm_ms.setToolTip(
+            "Aufnahme erst nach durchgehend gültiger, vollständig sichtbarer Geometrie starten."
+        )
+        form.addRow("Bauteilbestätigung", self.presence_confirm_ms)
+        self.capture_start_mode.currentIndexChanged.connect(
+            lambda: self.presence_confirm_ms.setEnabled(
+                self.capture_start_mode.currentData() == "presence"
+            )
+        )
+        self.uncertain_repeat_timing = QComboBox()
+        self.uncertain_repeat_timing.addItem("Nach jeder Versuchsreihe anbieten", "series_end")
+        self.uncertain_repeat_timing.addItem("Am Kampagnenende gesammelt anbieten", "campaign_end")
+        form.addRow("Unsichere Versuche wiederholen", self.uncertain_repeat_timing)
         ranges = QWidget()
         grid = QGridLayout(ranges)
         for column, title in enumerate(("", "Minimum", "Maximum", "Schrittweite")):
@@ -388,6 +451,22 @@ class TrainingWindow(QMainWindow):
         self.progress = QLabel("Noch keine Kampagne angelegt.")
         self.progress.setWordWrap(True)
         run.addWidget(self.progress)
+        self.capture_info = QLabel(
+            "Gespeicherte Versuchsdatensätze: 0 · Livekurve ist keine Aufnahme"
+        )
+        self.saved_attempts = 0
+        self.recorded_passages = 0
+        run.addWidget(self.capture_info)
+        self.run_pose_title = QLabel("Ausgangspose und Zielpose")
+        run.addWidget(self.run_pose_title)
+        run_poses = QHBoxLayout()
+        self.run_previews = [QLabel("Ausgangspose"), QLabel("Zielpose")]
+        for preview in self.run_previews:
+            preview.setMinimumSize(280, 150)
+            preview.setMaximumHeight(170)
+            preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            run_poses.addWidget(preview)
+        run.addLayout(run_poses)
         actions = QHBoxLayout()
         self.confirm_button = button(actions, "Reihe starten [Leertaste]", self.confirm_series)
         self.pause_button = button(actions, "Pause / Aufnahme abbrechen", self.pause)
@@ -397,8 +476,21 @@ class TrainingWindow(QMainWindow):
             actions, "Manueller Kameratrigger", lambda: self.worker.submit("trigger")
         )
         run.addLayout(actions)
+        repeats = QHBoxLayout()
+        self.repeat_uncertain_button = button(
+            repeats, "Unsichere Versuche wiederholen", lambda: self.send("repeat_uncertain")
+        )
+        self.defer_uncertain_button = button(
+            repeats, "Vorerst ohne Wiederholung weiter", lambda: self.send("defer_uncertain")
+        )
+        self.repeat_info = QLabel("Unsichere Versuche: 0")
+        repeats.addWidget(self.repeat_info)
+        run.addLayout(repeats)
         resume = QHBoxLayout()
         self.resume_button = button(resume, "Kampagne wiederaufnehmen", self.resume_campaign)
+        self.end_campaign_button = button(
+            resume, "Kampagne abbrechen / löschen", self.end_campaign_dialog
+        )
         button(resume, "In Datenprüfung öffnen", self.open_review)
         run.addLayout(resume)
         self.curve = AngleCurve()
@@ -407,6 +499,10 @@ class TrainingWindow(QMainWindow):
         self.log.document().setMaximumBlockCount(300)
         run.addWidget(self.log, 1)
         self.review = ReviewPage()
+        self.review.storage_changed.connect(
+            lambda path: self.worker.submit("refresh_storage", path)
+        )
+        self.review.review_changed.connect(lambda path: self.worker.submit("refresh_reviews", path))
         self.pages.addTab(self.review, "Daten prüfen")
         training = QWidget()
         self.pages.addTab(training, "Modelltraining")
@@ -487,12 +583,15 @@ class TrainingWindow(QMainWindow):
             self.worker.submit("band_start")
 
     def stop_band(self):
+        if not self.worker.demo and self.worker.session_id:
+            self.worker.external_stop.set()
         self.worker.request_pause()
         if self.worker.demo:
             self.worker.submit("band_stop")
         elif self.worker.session_id and not (self.band_worker and self.band_worker.isRunning()):
             self.band_worker = BandStopWorker(self.pressure_url, self.worker.session_id)
             self.band_worker.completed.connect(self.log.append)
+            self.band_worker.finished.connect(self.worker.external_stop.clear)
             self.band_worker.finished.connect(self.finish_close)
             self.band_worker.start()
 
@@ -531,6 +630,92 @@ class TrainingWindow(QMainWindow):
                     preview.setText(str(exc))
             else:
                 preview.setText(caption)
+        if self.campaign_path is None:
+            self.run_pose_title.setText(
+                f"{context['part_name']} · Ausgangs- und Zielpose"
+                if context
+                else "Ausgangspose und Zielpose"
+            )
+            for source, target in zip(self.previews, self.run_previews, strict=True):
+                pixmap = source.pixmap()
+                if pixmap and not pixmap.isNull():
+                    target.setPixmap(pixmap)
+                else:
+                    target.setText(source.text())
+
+    def load_run_poses(self, directory):
+        self.pose_generation += 1
+        self.run_context = None
+        for preview in self.run_previews:
+            preview.setText("Kampagnenpose wird geladen …")
+        try:
+            store = CampaignStore(directory)
+            asset = next(a for a in store.manifest["assets"] if a["kind"] == "mesh")
+            path = inside(store.directory, asset["path"])
+            self.run_context = store.plan.context
+            self.run_pose_title.setText(f"{self.run_context['part_name']} · Kampagnenposen")
+            snapshot = store.plan.snapshot
+            self.pose_worker.commands.put(
+                (
+                    self.pose_generation,
+                    path,
+                    snapshot.get("import_unit", "mm"),
+                    snapshot.get("material", {}).get("density_kg_m3"),
+                )
+            )
+            if not self.pose_worker.isRunning():
+                self.pose_worker.start()
+        except (OSError, ValueError, KeyError, StopIteration) as exc:
+            for preview in self.run_previews:
+                preview.setText("Kampagnenpose nicht verfügbar: " + str(exc))
+
+    def accept_run_analysis(self, generation, analysis, error):
+        if generation != self.pose_generation or self.closing or self.run_context is None:
+            return
+        for preview, key, caption in zip(
+            self.run_previews,
+            ("source_quaternion_xyzw", "target_quaternion_xyzw"),
+            ("Ausgangspose", "Zielpose"),
+            strict=True,
+        ):
+            try:
+                if analysis is None:
+                    raise ValueError(error)
+                preview.setPixmap(
+                    render_mesh_preview(
+                        analysis.path,
+                        300,
+                        160,
+                        quaternion_xyzw=self.run_context[key],
+                        caption=caption,
+                        triangles=analysis.preview_triangles,
+                    )
+                )
+            except (ValueError, OSError, KeyError) as exc:
+                preview.setText(caption + ": " + str(exc))
+
+    def end_campaign_dialog(self):
+        if not self.campaign_path or self.command_pending:
+            return
+        self.worker.request_pause()
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Kampagne abbrechen / löschen")
+        dialog.setText("Die Kampagne wird pausiert. Was soll mit den Daten geschehen?")
+        dialog.setInformativeText(
+            f"Kampagnenordner:\n{self.campaign_path}\n\n"
+            "Abbrechen beendet die Sitzung und erhält alle Daten. Löschen entfernt diesen "
+            "Kampagnenordner vollständig. Originalaufnahmen im Kamera-Repo bleiben erhalten."
+        )
+        keep = dialog.addButton("Abbrechen · Daten behalten", QMessageBox.ButtonRole.AcceptRole)
+        delete = dialog.addButton(
+            "Abbrechen und Daten löschen", QMessageBox.ButtonRole.DestructiveRole
+        )
+        dialog.addButton("Nur pausieren", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(keep)
+        dialog.exec()
+        if dialog.clickedButton() in (keep, delete):
+            self.ending_campaign = True
+            self.send("end_campaign", dialog.clickedButton() == delete, self.campaign_path)
 
     def part_dialog(self, path, selection=None):
         dialog = PartPoseDialog(
@@ -544,8 +729,77 @@ class TrainingWindow(QMainWindow):
             self.active_dialog = None
             dialog.deleteLater()
 
+    def source_folder(self, kind):
+        fallback = default_roadmap_directory() if kind == "roadmap" else Path.home()
+        saved = QSettings("BiBaZu", "AutoTuneTraining").value(f"source_folders/{kind}", "")
+        return str(Path(saved) if saved and Path(saved).is_dir() else fallback)
+
+    def configure_source_folders(self):
+        preferences = QSettings("BiBaZu", "AutoTuneTraining")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Standardordner für die Dateiauswahl")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel("Roadmap und STL können unterschiedliche Standardordner verwenden.")
+        )
+        form = QFormLayout()
+        layout.addLayout(form)
+        fields = {}
+        for kind, caption in (("roadmap", "Roadmap"), ("stl", "STL")):
+            row = QHBoxLayout()
+            field = QLineEdit(preferences.value(f"source_folders/{kind}", ""))
+            field.setPlaceholderText(self.source_folder(kind))
+            field.setMinimumWidth(380)
+            row.addWidget(field)
+
+            def browse(checked=False, field=field, kind=kind, caption=caption):
+                path = QFileDialog.getExistingDirectory(
+                    dialog,
+                    f"Standardordner für {caption}",
+                    field.text() or self.source_folder(kind),
+                )
+                if path:
+                    field.setText(path)
+
+            button(row, "Auswählen …", browse)
+            form.addRow(caption, row)
+            fields[kind] = field
+        layout.addWidget(QLabel("Leere Felder verwenden den bisherigen Standardordner."))
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.rejected.connect(dialog.reject)
+
+        def save():
+            folders = {kind: field.text().strip() for kind, field in fields.items()}
+            for folder in folders.values():
+                if folder and not Path(folder).is_dir():
+                    QMessageBox.warning(
+                        dialog, "Standardordner", f"Ordner nicht gefunden: {folder}"
+                    )
+                    return
+            for kind, folder in folders.items():
+                key = f"source_folders/{kind}"
+                if folder:
+                    preferences.setValue(key, str(Path(folder).resolve()))
+                else:
+                    preferences.remove(key)
+            preferences.sync()
+            if preferences.status() != QSettings.Status.NoError:
+                QMessageBox.warning(
+                    dialog, "Standardordner", "Ordner konnten nicht gespeichert werden."
+                )
+                return
+            dialog.accept()
+
+        buttons.accepted.connect(save)
+        layout.addWidget(buttons)
+        dialog.exec()
+
     def load_stl(self):
-        path, _ = QFileDialog.getOpenFileName(self, "STL laden", "", "STL (*.stl)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "STL laden", self.source_folder("stl"), "STL (*.stl)"
+        )
         if path:
             self.roadmap_path = None
             self.guarded(lambda: self.part_dialog(path))
@@ -557,7 +811,9 @@ class TrainingWindow(QMainWindow):
     def assign_mesh(self):
         if not self.settings.context:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "STL zuordnen", "", "STL (*.stl)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "STL zuordnen", self.source_folder("stl"), "STL (*.stl)"
+        )
         if path:
             selection = WorkpieceSelection(
                 self.settings.context,
@@ -569,7 +825,7 @@ class TrainingWindow(QMainWindow):
 
     def load_roadmap(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Roadmap laden", str(default_roadmap_directory()), "Roadmap (*.json *.yaml *.yml)"
+            self, "Roadmap laden", self.source_folder("roadmap"), "Roadmap (*.json *.yaml *.yml)"
         )
         if not path:
             return
@@ -721,6 +977,13 @@ class TrainingWindow(QMainWindow):
             repetitions=self.repetitions.value(),
             settling_seconds=self.settling.value(),
             trial_timeout_seconds=self.timeout.value(),
+            capture_start_mode=self.capture_start_mode.currentData(),
+            presence_confirm_seconds=(
+                self.presence_confirm_ms.value() / 1000
+                if self.capture_start_mode.currentData() == "presence"
+                else None
+            ),
+            uncertain_repeat_timing=self.uncertain_repeat_timing.currentData(),
             snapshot={
                 "mesh_sha256": analysis.sha256,
                 "import_unit": analysis.unit,
@@ -804,11 +1067,25 @@ class TrainingWindow(QMainWindow):
             self.command_pending = False
             self.state = value
             self.status.setText(STATES.get(value, value))
+            if value == "waiting" and self.capture_mode == "hardware":
+                self.status.setText("BEREIT · warte auf Hardwaretrigger, noch keine Aufnahme")
+            elif (
+                value == "waiting"
+                and self.capture_mode == "presence"
+                and getattr(self, "capture_guard", None)
+            ):
+                self.status.setText("BEREIT · warte auf bestätigtes Bauteil")
         elif name == "progress":
             self.can_skip = value["can_skip"]
             point = value["point"]
+            self.pending_repeats = value["pending_repeats"]
+            self.repeat_info.setText(
+                f"Offene unsichere Versuche: {value['pending_repeats']}"
+                + (" · Wiederholungsrunde" if value["repeat_active"] else "")
+            )
             self.progress.setText(
-                f"{value['slot']} / {value['total']} Versuchsplätze abgeschlossen · "
+                f"{value['sweep_slot']} / {value['total']} reguläre Versuchsplätze erledigt "
+                "(inkl. unsicher/übersprungen) · "
                 f"Kombination {point['index'] + 1}: {point['pressure_mbar']} mbar, "
                 f"{point['pulse_duration_ms']} ms · Wiederholung {value['repetition']}\n"
                 + value["directory"]
@@ -816,7 +1093,56 @@ class TrainingWindow(QMainWindow):
         elif name == "campaign":
             self.campaign_path = value
             self.log.append("Kampagne: " + value)
+            self.load_run_poses(value)
+            records = CampaignStore(value).trials()
+            self.saved_attempts = len(records)
+            self.recorded_passages = sum(
+                bool(r.get("clip")) and r.get("camera_status") == "completed" for r in records
+            )
+            self.update_capture_info()
+        elif name == "campaign_ended":
+            self.ending_campaign = False
+            self.campaign_path = None
+            self.pose_generation += 1
+            self.run_context = None
+            self.update_selection()
+            self.live_rows = []
+            self.curve.set_rows([])
+            self.progress.setText(
+                "Kampagne abgebrochen · "
+                + (
+                    "Daten gelöscht"
+                    if value["deleted"]
+                    else "Löschen fehlgeschlagen"
+                    if value.get("delete_requested")
+                    else "Daten behalten"
+                )
+                + "\n"
+                + value["directory"]
+            )
+            self.log.append(self.progress.text())
+            if (
+                value["deleted"]
+                and self.review.store
+                and (self.review.store.directory == Path(value["directory"]))
+            ):
+                self.review.store = None
+                self.review.records = self.review.frames = []
+                self.review.table.setRowCount(0)
+                self.review.select()
+                self.review.path_label.setText("Kampagne gelöscht.")
+                self.training_count.clear()
         elif name == "result":
+            if value.get("media", {}).get("state") == "failed":
+                self.log.append(
+                    "Prüfvideo nicht verfügbar; Messdaten erhalten: "
+                    + (value["media"].get("error") or "Videofehler")
+                )
+            self.saved_attempts += 1
+            self.recorded_passages += (
+                bool(value.get("clip")) and value.get("camera_status") == "completed"
+            )
+            self.update_capture_info()
             self.live_rows = []
             evaluation = value["evaluation"]
             self.log.append(
@@ -829,18 +1155,37 @@ class TrainingWindow(QMainWindow):
                 self.live_rows.append({**row, "continuous_angle_deg": row.get("angle_deg")})
             self.live_rows = self.live_rows[-20000:]
             self.curve.set_rows(self.live_rows)
+        elif name == "attempt_started":
+            self.live_rows = []
+            self.curve.set_rows([])
+        elif name == "storage_info":
+            self.storage_label.setText(
+                f"Kampagne ≈ {value['campaign_bytes'] / 1024**2:.1f} MiB · "
+                f"Frei: {value['free_bytes'] / 1024**3:.2f} GiB · Mindestreserve 1 GiB"
+            )
         elif name == "pressure_state":
             motor = value.get("conveyor") or {}
             self.band_label.setText("Band: " + ("läuft" if motor.get("moving") else "steht"))
         elif name == "motor_pending":
             self.motor_pending = value
         elif name == "capture_mode":
+            self.capture_mode = value
+        elif name == "capture_guard":
+            self.capture_guard = value
             self.camera_manual = value == "manual"
         elif name == "error":
+            self.ending_campaign = False
             self.command_pending = False
             self.log.append("Fehler: " + value)
             self.statusBar().showMessage(value)
         self.controls()
+
+    def update_capture_info(self):
+        self.capture_info.setText(
+            f"Vollständig aufgezeichnete Durchläufe: {self.recorded_passages} · "
+            f"Versuchsdatensätze: {self.saved_attempts} · "
+            "Livekurve ist keine bestätigte Flip-Auswertung"
+        )
 
     def controls(self):
         editable = self.state in {"disconnected", "ready", "complete"} and not self.closing
@@ -859,6 +1204,7 @@ class TrainingWindow(QMainWindow):
                 "complete",
                 "paused",
                 "disabling",
+                "review_pending",
             }
             and not self.closing
         )
@@ -877,13 +1223,26 @@ class TrainingWindow(QMainWindow):
                 "waiting",
                 "recording",
                 "complete",
+                "review_pending",
             }
             and not self.closing
         )
         self.band_stop.setEnabled(self.state not in {"disconnected", "connecting"})
+        self.repeat_uncertain_button.setEnabled(
+            self.state in {"review_pending", "complete"}
+            and bool(getattr(self, "pending_repeats", 0))
+            and not self.closing
+        )
+        self.defer_uncertain_button.setEnabled(self.state == "review_pending" and not self.closing)
+        self.end_campaign_button.setEnabled(
+            bool(self.campaign_path)
+            and not self.closing
+            and not self.command_pending
+            and not self.ending_campaign
+        )
         if not self.can_skip:
             self.skip_button.setEnabled(False)
-        if self.command_pending or self.motor_pending:
+        if self.command_pending or self.motor_pending or self.ending_campaign:
             for widget in (
                 self.connect_button,
                 self.create_button,
@@ -892,8 +1251,12 @@ class TrainingWindow(QMainWindow):
                 self.skip_button,
                 self.resume_button,
                 self.band_start,
+                self.repeat_uncertain_button,
+                self.defer_uncertain_button,
             ):
                 widget.setEnabled(False)
+        if self.ending_campaign:
+            self.release_button.setEnabled(False)
 
     def closeEvent(self, event):
         if not self.closing:
@@ -901,11 +1264,13 @@ class TrainingWindow(QMainWindow):
             self.worker.stopping.set()
             self.worker.request_pause()
             self.settings.stop()
+            self.pose_worker.stopping.set()
             self.controls()
             self.status.setText("Aufnahme abschließen und Sitzung beenden …")
         if (
             self.worker.isRunning()
             or self.settings.workers_running()
+            or self.pose_worker.isRunning()
             or (self.band_worker and self.band_worker.isRunning())
         ):
             event.ignore()
@@ -954,6 +1319,12 @@ def main():
     application = QApplication(sys.argv[:1])
     service = server = None
     try:
+        try:
+            __import__("cv2")
+        except ImportError as exc:
+            raise RuntimeError(
+                "OpenCV für Prüfvideos fehlt. Bitte Setup.ps1 erneut ausführen."
+            ) from exc
         if not args.demo and args.pressure_url is None:
             service, server = start_bundled(args)
             args.pressure_url = f"http://127.0.0.1:{server.port}"

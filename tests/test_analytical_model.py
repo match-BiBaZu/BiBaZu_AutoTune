@@ -33,7 +33,13 @@ from bibazu_autotune.trial_context import manual_context
 def configured(**values):
     # Preserve the original reference geometry independently of current machine defaults.
     config = ModelConfiguration(
-        **{"diameter_m": 0.0007, "pitch_m": (0.024 - 0.0007) / 7, "offset_safety_m": 0, **values}
+        **{
+            "diameter_m": 0.0007,
+            "pitch_m": (0.024 - 0.0007) / 7,
+            "offset_safety_m": 0,
+            "offset_strategy": "fixed",
+            **values,
+        }
     )
     return replace(
         config,
@@ -167,11 +173,12 @@ def test_offset_conversion_full_hits_and_lever(tmp_path, angle):
     assert impact.active_nozzles == (1,)
     radius = config.jet_radius_m
     for p in impact.points_m[:8]:
-        assert p[0] == pytest.approx(body.vertices[:, 0].max() + radius - impact.offset_m)
+        assert p[0] == pytest.approx(body.vertices[:, 0].max() - impact.offset_m)
     assert impact.area_eff_m2 == pytest.approx(8 * math.pi * radius**2)
     assert impact.lever_arm_m == pytest.approx(0.02 - radius - config.margin_m, abs=1e-7)
     assert abs(impact.com_offsets_m[0][0]) != pytest.approx(impact.lever_arm_m)
-    expected_offset = 0.02 - config.margin_m if angle > 0 else 2 * radius + config.margin_m
+    clearance = radius + config.margin_m
+    expected_offset = 0.02 - clearance if angle > 0 else clearance
     assert impact.offset_m == pytest.approx(expected_offset, abs=1e-7)
 
 
@@ -294,7 +301,7 @@ def test_screenshot_regression_seven_hits_one_misses(tmp_path):
     assert 0.25 < impact.coverage_fractions[6] < 0.5
     assert impact.coverage_fractions[7] == 0
     assert sum(impact.full_weights) == 1
-    assert impact.offset_m == pytest.approx(0.0078366, abs=1e-6)
+    assert impact.offset_m == pytest.approx(0.0078366 - config.jet_radius_m, abs=1e-6)
     assert impact.area_eff_m2 == pytest.approx(6 * math.pi * config.jet_radius_m**2)
     predictor = AnalyticalPressureModel()
     weighted = predictor.predict(body, mechanics, impact, 100, config)
