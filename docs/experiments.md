@@ -184,7 +184,7 @@ und `evaluation_version`.
 
 Bestehende Kampagnen ohne Versionsangabe behalten Version 1 und den bisherigen
 Aufnahmestart. Sie werden nicht automatisch neu ausgewertet. Originalmessungen,
-Kamera-Abbruchgründe und manuelle Gut-/Schlecht-Entscheidungen bleiben erhalten.
+Kamera-Abbruchgründe und manuelle Prüfentscheidungen bleiben erhalten.
 
 Unsichere Winkelauswertung, fehlende stabile Abschnitte und unvollständige
 Kameraaufnahmen werden mit Grund gespeichert und zur Wiederholung vorgemerkt.
@@ -271,19 +271,23 @@ gemeinsam durchsuchbar. Eine Korrektur oder ein Ausschluss benötigt eine
 Begründung. Wiedereinschließen ist ebenfalls möglich. Ursprüngliche Messwerte
 und automatische Klassen bleiben unverändert.
 
-Rechts in jeder Versuchszeile stehen **Gut** und **Schlecht** für die Datenqualität.
-**Gut** gibt die Daten nach Sichtprüfung frei; fehlt eine Flipklasse, muss diese
-im Auswahldialog angegeben werden. **Schlecht** schließt den Versuch vom Training
-aus. Eine spätere Freigabe ist mit **Gut** möglich. Beide Aktionen speichern eine
-Prüfentscheidung mit Begründung; Originalmesswerte und automatische Auswertung
-bleiben erhalten. **Gut** bedeutet verwendbare Daten und kann auch die Flipklasse
-`not_flipped` haben. Die Spalte **Grund** erläutert die automatische Unsicherheit
-und zeigt etwa bei `memory_limit`, dass der Aufnahmepuffer voll war.
+Rechts in jeder Versuchszeile stehen **Not Flipped**, **Flipped**, **Overflipped**
+und **Ungültig**. Ein Klick auf einen Klassenbutton speichert die gewählte Klasse
+und gibt den Versuch fürs Training frei. **Ungültig** schließt den Versuch vom
+Training aus und behält eine bereits vorhandene Klasse. Ein Klassenbutton kann
+den Versuch später wieder freigeben.
+
+Bei gültiger automatischer Auswertung ist die erkannte Klasse markiert und die
+Spalte **Qualität** zeigt **Automatisch gültig**. Ein Klick auf den markierten
+Button bestätigt die Klasse manuell. Die Qualität wechselt dann zu **Gültig**.
+Bei unsicherer Auswertung ohne Prüfentscheidung bleibt die Auswahl offen. Die
+Spalte **Grund** erläutert die automatische Unsicherheit und zeigt etwa bei
+`memory_limit`, dass der Aufnahmepuffer voll war.
 
 Wiederholtes Bestätigen derselben Bewertung mit unveränderter Klasse und
 Begründung erzeugt keinen zusätzlichen Historieneintrag. Beim Wechsel zwischen
-**Gut** und **Schlecht** bleibt nur der aktuelle Standardtext in der Begründung;
-eigene Notizen und die Historie früherer Entscheidungen bleiben erhalten.
+Freigabe und Ausschluss zeigt die Begründung den aktuellen Standardtext.
+Eigene Notizen und die Historie früherer Entscheidungen bleiben erhalten.
 Bereits angehäufte Standardtexte alter Prüfungen werden in Anzeige und Export
 zusammengefasst.
 
@@ -294,8 +298,8 @@ bestätigte oder ausgeschlossene Versuche werden übersprungen. Wiederholtes Kli
 erzeugt keine doppelten Bestätigungen; Originalmesswerte und automatische
 Auswertungen bleiben unverändert.
 
-Gespeicherte Entscheidungen **Gut** oder **Schlecht** nehmen den jeweiligen
-unsicheren Versuch aus der Wiederholungsliste. Anzahl und Freigabestatus in der
+Eine gespeicherte Flipklasse oder ein Ausschluss nimmt den jeweiligen unsicheren
+Versuch aus der Wiederholungsliste. Anzahl und Freigabestatus in der
 Durchführung werden direkt aktualisiert, auch bei bereits bestehenden Kampagnen.
 Eine Prüfung mit Klasse **Zu prüfen** ohne Ausschluss bleibt offen. Bereits
 vorgemerkte Wiederholungen werden vor dem Start erneut geprüft und beim

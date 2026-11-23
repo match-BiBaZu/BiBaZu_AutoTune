@@ -8,7 +8,8 @@ from test_experiments import plan_assets as plan_assets
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtCore import QEvent
+from PyQt6.QtWidgets import QMessageBox
 
 from bibazu_autotune.engine import atomic_json
 from bibazu_autotune.experiments.models import BAD_REVIEW_REASON, GOOD_REVIEW_REASON
@@ -17,8 +18,7 @@ from bibazu_autotune.experiments.storage import CampaignStore, read_json
 
 
 @pytest.fixture
-def review_case(tmp_path, plan_assets, monkeypatch):
-    application = QApplication.instance() or QApplication([])
+def review_case(tmp_path, plan_assets, monkeypatch, qt_application):
     plan, assets = plan_assets
     store = CampaignStore.create(tmp_path / "campaigns", plan, assets=assets)
     records = []
@@ -49,7 +49,8 @@ def review_case(tmp_path, plan_assets, monkeypatch):
     page.load(store.directory)
     yield page, store, records, errors, changes
     page.close()
-    application.processEvents()
+    page.deleteLater()
+    qt_application.sendPostedEvents(page, QEvent.Type.DeferredDelete)
 
 
 def test_confirm_automatic_is_campaign_wide_preserves_manual_and_is_idempotent(review_case):
@@ -121,16 +122,16 @@ def test_repeated_review_clicks_do_not_append_reasons_or_duplicate_history(revie
     directory = store.trial_directory(trial_id)
     original = (directory / "trial.json").read_bytes()
     path = directory / "annotations.json"
-    for good, reason, count in (
-        (True, GOOD_REVIEW_REASON, 1),
-        (False, BAD_REVIEW_REASON, 2),
-        (True, GOOD_REVIEW_REASON, 3),
+    for label, reason, count in (
+        ("flipped", GOOD_REVIEW_REASON, 1),
+        (None, BAD_REVIEW_REASON, 2),
+        ("overflipped", GOOD_REVIEW_REASON, 3),
     ):
-        page.quick_review(trial_id, good)
+        page.quick_review(trial_id, label)
         assert store.annotation(trial_id)["reason"] == reason
         assert len(read_json(path)["history"]) == count
         saved = path.read_bytes()
-        page.quick_review(trial_id, good)
+        page.quick_review(trial_id, label)
         assert path.read_bytes() == saved
     assert (directory / "trial.json").read_bytes() == original
     assert not errors
@@ -139,9 +140,9 @@ def test_repeated_review_clicks_do_not_append_reasons_or_duplicate_history(revie
 def test_review_switch_preserves_custom_note_and_manual_save_is_idempotent(review_case):
     page, store, records, errors, changes = review_case
     trial_id = records[1]["trial_id"]
-    page.quick_review(trial_id, False)
+    page.quick_review(trial_id, None)
     assert store.annotation(trial_id)["reason"] == "Manuell korrigiert; " + BAD_REVIEW_REASON
-    page.quick_review(trial_id, True)
+    page.quick_review(trial_id, "not_flipped")
     assert store.annotation(trial_id)["reason"] == "Manuell korrigiert; " + GOOD_REVIEW_REASON
     path = store.trial_directory(trial_id) / "annotations.json"
     original = path.read_bytes()
@@ -168,12 +169,12 @@ def test_legacy_accumulated_reasons_are_displayed_once_without_rewriting_history
     page.refresh()
     assert page.table.item(0, 7).text() == "Eigene Notiz; " + GOOD_REVIEW_REASON
     assert path.read_bytes() == original
-    page.quick_review(trial_id, True)
+    page.quick_review(trial_id, "flipped")
     history = read_json(path)["history"]
     assert history[0] == legacy
     assert history[-1]["reason"] == "Eigene Notiz; " + GOOD_REVIEW_REASON
     assert len(history) == 2
     saved = path.read_bytes()
-    page.quick_review(trial_id, True)
+    page.quick_review(trial_id, "flipped")
     assert path.read_bytes() == saved
     assert not errors

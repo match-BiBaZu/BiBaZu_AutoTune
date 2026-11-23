@@ -19,8 +19,7 @@ from bibazu_autotune.experiments.storage import CampaignStore
 
 
 @pytest.fixture
-def training_window(tmp_path, monkeypatch):
-    application = QApplication.instance() or QApplication([])
+def training_window(tmp_path, monkeypatch, qt_application):
     errors = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
     window = TrainingWindow(None, "simulation", tmp_path / "campaigns", demo=True)
@@ -29,7 +28,7 @@ def training_window(tmp_path, monkeypatch):
     def wait(predicate, timeout=20):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            application.processEvents()
+            qt_application.processEvents()
             if predicate():
                 return
             time.sleep(0.01)
@@ -37,15 +36,9 @@ def training_window(tmp_path, monkeypatch):
 
     yield window, wait, errors
     window.close()
-    wait(
-        lambda: (
-            not window.worker.isRunning()
-            and not window.settings.workers_running()
-            and not window.pose_worker.isRunning()
-        )
-    )
-    window.close()
-    application.processEvents()
+    wait(lambda: not window.isVisible())
+    window.deleteLater()
+    qt_application.sendPostedEvents(window, QEvent.Type.DeferredDelete)
 
 
 def prepare_candidate(window, wait, tmp_path):
@@ -85,9 +78,7 @@ def test_window_starts_offline_and_has_three_workspaces(training_window, tmp_pat
     assert not errors
 
 
-def test_row_review_buttons_preserve_raw_data_and_require_class_for_good_data(
-    training_window, tmp_path, monkeypatch
-):
+def test_row_review_buttons_suggest_and_save_classes(training_window, tmp_path, monkeypatch):
     window, wait, errors = training_window
     prepare_campaign(window, wait, tmp_path)
     window.confirm_button.click()
@@ -101,36 +92,70 @@ def test_row_review_buttons_preserve_raw_data_and_require_class_for_good_data(
     )
     first["stop_reason"] = "memory_limit"
     store.save_trial(first)
+    second["evaluation"].update(label="flipped", quality="valid", reasons=[])
+    store.save_trial(second)
     directory = store.trial_directory(first["trial_id"])
     original = {
         name: (directory / name).read_bytes() for name in ("trial.json", "measurements.csv")
     }
+    dialogs = []
+
+    def unexpected_class_dialog(*args):
+        dialogs.append(args)
+        return "", False
+
+    monkeypatch.setattr(QInputDialog, "getItem", unexpected_class_dialog)
     window.open_review()
+    QApplication.processEvents()
     review = window.review
+    first_id, second_id = first["trial_id"], second["trial_id"]
 
-    def click(trial_id, text):
-        index = next(i for i, row in enumerate(review.records) if row["trial_id"] == trial_id)
+    def buttons_at(index):
         widget = review.table.cellWidget(index, 8)
-        next(b for b in widget.findChildren(QPushButton) if b.text() == text).click()
+        return {button.text(): button for button in widget.findChildren(QPushButton)}
 
+    def checked_at(index):
+        return [title for title, button in buttons_at(index).items() if button.isChecked()]
+
+    assert [row["trial_id"] for row in review.records] == [first_id, second_id]
     assert "Aufnahmepuffer voll" in review.table.item(0, 7).text()
-    click(second["trial_id"], "Schlecht")
-    assert store.annotation(second["trial_id"])["excluded"]
-    assert review.selected()["trial_id"] == second["trial_id"]
+    assert list(buttons_at(0)) == ["Not Flipped", "Flipped", "Overflipped", "Ungültig"]
+    actions = review.table.cellWidget(0, 8)
+    assert review.table.viewport().rect().contains(actions.geometry())
+    for button in buttons_at(0).values():
+        assert actions.rect().contains(button.geometry())
+        assert button.width() >= button.sizeHint().width()
+    assert checked_at(0) == []
+    assert checked_at(1) == ["Flipped"]
+    assert review.table.item(1, 5).text() == "Automatisch gültig"
+    assert store.annotation(second_id) is None
+
+    buttons_at(1)["Flipped"].click()
+    assert store.annotation(second_id)["label"] == "flipped"
+    assert review.table.item(1, 5).text() == "Gültig"
+    assert checked_at(1) == ["Flipped"]
+    buttons_at(1)["Ungültig"].click()
+    assert store.annotation(second_id)["excluded"]
+    assert store.annotation(second_id)["label"] == "flipped"
+    assert review.selected()["trial_id"] == second_id
+    assert review.table.item(1, 5).text() == "Ungültig"
+    assert checked_at(1) == ["Ungültig"]
     assert not DatasetReader([store]).classifier_rows()
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: ("", False))
-    click(first["trial_id"], "Gut")
-    assert store.annotation(first["trial_id"]) is None
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: ("not_flipped", True))
-    click(first["trial_id"], "Gut")
-    assert not store.annotation(first["trial_id"])["excluded"]
-    assert store.annotation(first["trial_id"])["label"] == "not_flipped"
-    assert len(DatasetReader([store]).classifier_rows()) == 1
-    assert review.table.item(0, 5).text() == "Gut"
+
+    buttons_at(0)["Not Flipped"].click()
+    assert not store.annotation(first_id)["excluded"]
+    assert store.annotation(first_id)["label"] == "not_flipped"
+    assert checked_at(0) == ["Not Flipped"]
+    assert review.table.item(0, 5).text() == "Gültig"
     assert all((directory / name).read_bytes() == content for name, content in original.items())
-    click(second["trial_id"], "Gut")
-    assert len(DatasetReader([store]).classifier_rows()) == 2
-    assert len(store.annotation(second["trial_id"])["reason"]) > 0
+    buttons_at(1)["Overflipped"].click()
+    assert checked_at(1) == ["Overflipped"]
+    assert review.records[1]["automatic_label"] == "flipped"
+    assert {row["label"] for row in DatasetReader([store]).classifier_rows()} == {
+        "not_flipped",
+        "overflipped",
+    }
+    assert not dialogs
     assert not errors
 
 
@@ -177,7 +202,6 @@ def test_review_decisions_update_live_repeat_count_and_finish_campaign(
         return result, samples
 
     monkeypatch.setattr(storage, "evaluate", uncertain)
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: ("not_flipped", True))
     window, wait, errors = training_window
     prepare_campaign(window, wait, tmp_path)
     window.confirm_button.click()
@@ -187,9 +211,9 @@ def test_review_decisions_update_live_repeat_count_and_finish_campaign(
     assert window.pending_repeats == 2
     window.open_review()
     first, second = window.review.records
-    window.review.quick_review(first["trial_id"], True)
+    window.review.quick_review(first["trial_id"], "not_flipped")
     wait(lambda: window.pending_repeats == 1)
-    window.review.quick_review(second["trial_id"], False)
+    window.review.quick_review(second["trial_id"], None)
     wait(lambda: window.pending_repeats == 0 and window.state == "complete")
     assert not window.repeat_uncertain_button.isEnabled()
     assert "Offene unsichere Versuche: 0" in window.repeat_info.text()

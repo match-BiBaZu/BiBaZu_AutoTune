@@ -12,9 +12,9 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -195,6 +195,8 @@ class ReviewPage(QWidget):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().moveSection(8, 7)
+        self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemSelectionChanged.connect(self.select)
         root.addWidget(self.table, 1)
         split = QSplitter()
@@ -266,17 +268,24 @@ class ReviewPage(QWidget):
             self.table.blockSignals(True)
             self.table.setRowCount(len(self.records))
             for index, row in enumerate(self.records):
+                checked_label = None
+                if row["excluded"]:
+                    quality = "Ungültig"
+                elif row["reviewed"] and row["label"] in LABELS:
+                    quality = "Gültig"
+                    checked_label = row["label"]
+                elif self.automatic_candidate(row):
+                    quality = "Automatisch gültig"
+                    checked_label = row["automatic_label"]
+                else:
+                    quality = "Zu prüfen"
                 values = [
                     row["trial_id"][:10],
                     f"{row['point_index'] + 1} / {row['repetition']}",
                     row["input_pressure_mbar"],
                     row["input_pulse_duration_ms"],
                     row["label"] or "Zu prüfen",
-                    ("Schlecht" if row["excluded"] else "Gut")
-                    if row["reviewed"] and (row["excluded"] or row["label"] is not None)
-                    else "Automatisch gültig"
-                    if row["quality"] == "valid"
-                    else "Zu prüfen",
+                    quality,
                     "Ja" if row["excluded"] else "Nein",
                     row["review_reason"] or quality_explanation(row),
                 ]
@@ -285,29 +294,31 @@ class ReviewPage(QWidget):
                     item.setToolTip(str(value))
                     self.table.setItem(index, column, item)
                 actions = QWidget()
-                buttons = QHBoxLayout(actions)
-                buttons.setContentsMargins(2, 0, 2, 0)
-                for good, title in ((True, "Gut"), (False, "Schlecht")):
+                buttons = QGridLayout(actions)
+                buttons.setContentsMargins(2, 2, 2, 2)
+                buttons.setSpacing(2)
+                for label, title, button_row, button_column in (
+                    ("not_flipped", "Not Flipped", 0, 0),
+                    ("flipped", "Flipped", 0, 1),
+                    ("overflipped", "Overflipped", 1, 0),
+                    (None, "Ungültig", 1, 1),
+                ):
                     action = QPushButton(title)
                     action.setToolTip(
-                        "Daten nach Sichtprüfung freigeben; Flipklasse bleibt separat."
-                        if good
+                        f"Als {title} bestätigen und fürs Training freigeben."
+                        if label is not None
                         else "Fehlerhafte Daten vom Training ausschließen."
                     )
                     action.setCheckable(True)
-                    action.setChecked(
-                        row["reviewed"]
-                        and (row["excluded"] or row["label"] is not None)
-                        and row["excluded"] != good
-                    )
-                    color = "#bbf7d0" if good else "#fecaca"
+                    action.setChecked(row["excluded"] if label is None else label == checked_label)
+                    color = "#fecaca" if label is None else "#bbf7d0"
                     action.setStyleSheet(f"QPushButton:checked {{ background: {color}; }}")
                     action.clicked.connect(
-                        lambda checked=False, trial_id=row["trial_id"], good=good: (
-                            self.quick_review(trial_id, good)
+                        lambda checked=False, trial_id=row["trial_id"], label=label: (
+                            self.quick_review(trial_id, label)
                         )
                     )
-                    buttons.addWidget(action)
+                    buttons.addWidget(action, button_row, button_column)
                 self.table.setCellWidget(index, 8, actions)
             self.table.blockSignals(False)
             if self.records:
@@ -426,28 +437,18 @@ class ReviewPage(QWidget):
         except (OSError, ValueError, KeyError) as exc:
             self.image_label.setText(str(exc))
 
-    def quick_review(self, trial_id, good):
+    def quick_review(self, trial_id, label):
         index = next((i for i, row in enumerate(self.records) if row["trial_id"] == trial_id), None)
         if index is None:
             return
         self.table.selectRow(index)
         row = self.records[index]
-        label = row["label"]
-        if good and label is None:
-            label, accepted = QInputDialog.getItem(
-                self,
-                "Gute Daten: Flipklasse festlegen",
-                "Welche Flipklasse ist im Prüfvideo zu sehen?",
-                list(LABELS),
-                0,
-                False,
-            )
-            if not accepted:
-                self.refresh()
-                return
-        reason = current_review_reason(row["review_reason"], not good, quick=True)
+        excluded = label is None
+        if excluded:
+            label = row["label"]
+        reason = current_review_reason(row["review_reason"], excluded, quick=True)
         try:
-            self.store.annotate(trial_id, label, not good, reason)
+            self.store.annotate(trial_id, label, excluded, reason)
             self.refresh()
             self.review_changed.emit(str(self.store.directory))
         except (OSError, ValueError) as exc:
