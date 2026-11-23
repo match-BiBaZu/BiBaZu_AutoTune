@@ -279,7 +279,7 @@ class TrainingWindow(QMainWindow):
         self.pressure_url = pressure_url
         self.editor = ParameterEditor()
         parameters = empty_parameters()
-        parameters["conveyor_speed_mm_per_sec"] = 50.0
+        parameters["conveyor_speed_mm_per_sec"] = 100.0
         self.editor.set_parameters(parameters)
         self.settings = AutotuneSettingsPage(self.editor.parameters, self)
         root = QWidget()
