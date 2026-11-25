@@ -1,12 +1,39 @@
 import argparse
 import subprocess
 import sys
+from importlib.metadata import distribution
 
 import httpx
 from test_pressure_service import MemoryMutex, MemoryPlc
 
 from bibazu_autotune.plc import AdsBackend
 from bibazu_autotune.pressure_service import PressureService, start_bundled
+
+
+def test_autotune_starts_without_importing_or_requiring_training(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys; import bibazu_autotune.app; "
+            "assert not any(m.startswith('bibazu_autotune_training') for m in sys.modules); "
+            "assert not any(m.startswith('bibazu_autotune.experiments') for m in sys.modules)",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    package = distribution("bibazu-autotune")
+    assert not any(
+        "bibazu-autotune-training" in requirement for requirement in package.requires or []
+    )
+    assert {point.name for point in package.entry_points} == {
+        "bibazu-autotune",
+        "bibazu-autotune-api",
+    }
 
 
 def test_headless_entrypoint_imports_no_gui_or_sibling_code(tmp_path):

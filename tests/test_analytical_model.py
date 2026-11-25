@@ -17,6 +17,7 @@ from bibazu_autotune.analytical_model import (
     TippingMechanics,
     Turn,
     coverage_weights,
+    drag_factor,
     drag_force,
     jet_hit_weights,
     jet_overlap_fractions,
@@ -363,10 +364,48 @@ def test_longitudinal_row_offsets_center_maximal_region(tmp_path):
     assert np.mean([p[0] for p in impact.points_m[:3]]) == pytest.approx(0, abs=1e-8)
 
 
+@pytest.mark.parametrize("c_c", [0.5, 1.0, 1.2])
+@pytest.mark.parametrize("gauge_pa", [0, 5000, 40000, 80000])
+def test_drag_force_matches_reference_equation_5_3(c_c, gauge_pa):
+    config = ModelConfiguration(
+        drag_coefficient=0.9, mesh_coefficient=0.6, concentricity_coefficient=c_c
+    )
+    # Independent direct transcription of (5.3), not using drag_factor or jet_radius_m.
+    p_0, p_1, A_st = 101300 + gauge_pa, 101300, 0.0002
+    expected = (
+        0.9
+        * c_c**2
+        * 0.6
+        * A_st
+        * p_1
+        * 1.4
+        / (1.4 - 1)
+        * ((p_0 / p_1) ** ((1.4 - 1) / 1.4) - 1)
+        * (0.0008 / (0.0008 + 2 * 0.025 * math.tan(math.radians(20) / 2))) ** 2
+    )
+    assert drag_force(gauge_pa, A_st, config) == pytest.approx(expected, rel=1e-12)
+
+
+def test_concentricity_halves_to_quarter_force_and_one_preserves_previous_force():
+    config = ModelConfiguration()
+    previous_force = 0.02300857996507076  # Captured before adopting c_c**2.
+    assert drag_force(40000, 0.0002, config) == pytest.approx(previous_force, rel=1e-12)
+    assert drag_force(
+        40000, 0.0002, replace(config, concentricity_coefficient=0.5)
+    ) == pytest.approx(previous_force / 4, rel=1e-12)
+
+
+@pytest.mark.parametrize("c_c", [1e200, 1e308])
+def test_concentricity_square_overflow_is_reported_as_value_error(c_c):
+    with pytest.raises(ValueError, match="Strömungsfaktor.*endlichen Zahlenbereichs"):
+        drag_factor(0.0002, ModelConfiguration(concentricity_coefficient=c_c))
+
+
+@pytest.mark.parametrize("c_c", [0.5, 1.0, 1.2])
 @pytest.mark.parametrize("pulse_ms", [10, 100, 500])
-def test_pressure_inverse_matches_force_without_clipping(tmp_path, pulse_ms):
+def test_pressure_inverse_matches_force_without_clipping(tmp_path, pulse_ms, c_c):
     _, _, body = analyzed_body(tmp_path)
-    config = configured(uphill_deg=0, cross_slope_deg=0)
+    config = configured(uphill_deg=0, cross_slope_deg=0, concentricity_coefficient=c_c)
     mount = next(m for m in config.mounts if m.array_index == 2 and m.nozzle_index == 1)
     mechanics = tipping_mechanics(body, Turn("y", 90), mount, config)
     impact = AutomaticOffsetEstimator().estimate(body, Turn("y", 90), mount, mechanics, config)
@@ -376,7 +415,24 @@ def test_pressure_inverse_matches_force_without_clipping(tmp_path, pulse_ms):
     ) / (pulse_ms / 1000 * impact.lever_arm_m)
     assert result.force_n == pytest.approx(expected_force)
     assert drag_force(result.gauge_pa, impact.area_eff_m2, config) == pytest.approx(expected_force)
+    # Evaluate the returned absolute pressure against (5.3) independently.
+    expected_reference_force = (
+        c_c**2
+        * 0.47
+        * impact.area_eff_m2
+        * 101300
+        * 1.4
+        / (1.4 - 1)
+        * ((result.absolute_pa / 101300) ** ((1.4 - 1) / 1.4) - 1)
+        * (0.0007 / (0.0007 + 2 * 0.025 * math.tan(math.radians(20) / 2))) ** 2
+    )
+    assert expected_reference_force == pytest.approx(expected_force, rel=1e-12)
     assert result.absolute_pa - result.gauge_pa == pytest.approx(config.ambient_pa)
+    if c_c == 1 and pulse_ms == 100:
+        # Regression values captured from the previous implementation with c_c = 1.
+        assert result.force_n == pytest.approx(0.25283376003573044, rel=1e-12)
+        assert result.gauge_pa == pytest.approx(310446.80419411196, rel=1e-12)
+        assert result.absolute_pa == pytest.approx(411746.80419411196, rel=1e-12)
     if pulse_ms == 10:
         assert result.gauge_pa > 80000
         assert result.warnings

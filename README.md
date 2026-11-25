@@ -9,9 +9,11 @@ und Modell-/Anlagenparameter.
 Die Anwendung arbeitet für Auswahl und Berechnung vollständig offline.
 SPS-Verbindung, Live-Parameterübertragung und manuelle Bandbedienung sind optional.
 Kamera, Variantenreihen und Versuchsdurchführung liegen in der separat startbaren
-[GUI für Versuchsdaten und Training](docs/experiments.md). Sie entsteht zunächst
-in diesem Repository; die normale AutoTune-Oberfläche behält ihren bisherigen Ablauf.
-Die Datenerfassung und einfache Datenprüfung sind nutzbar, Modelltraining ist vorbereitet.
+[GUI für Versuchsdaten und Training](https://github.com/match-BiBaZu/BiBaZu_AutoTune_Training) im eigenen Repository
+`BiBaZu_AutoTune_Training`. Gemeinsames analytisches Modell, Posewerkzeuge und
+SPS-Dienst bleiben in AutoTune; die Trainingsanwendung installiert dieses Paket
+als Abhängigkeit. Die normale AutoTune-Oberfläche behält ihren bisherigen Ablauf.
+Das Training-Repo erstellt Drei-Klassen-GP-Modelle aus geprüften Kampagnen.
 Bestehende Versuchsbausteine und aufgezeichnete Daten bleiben erhalten.
 
 ## Forschungshintergrund
@@ -29,10 +31,26 @@ Python 3.11+ oder uv installieren, dann in diesem Repository:
 ./Start.cmd
 ```
 
-Die neue Datenerfassung startet über **`Start-Training.cmd`**. Zum Ausprobieren
-ohne SPS und Kamera **`Start-Training.cmd --demo`** verwenden.
+Die Datenerfassung wird in **`BiBaZu_AutoTune_Training`** mit dessen **`Setup.ps1`**
+eingerichtet und mit **`Start.cmd`** gestartet. Zum Ausprobieren ohne SPS und Kamera
+dort **`Start.cmd --demo`** verwenden.
 Der Ablauf, die Kameraeinrichtung und das portable Datenformat stehen unter
-[Experimentelle Datenerfassung](docs/experiments.md).
+[Experimentelle Datenerfassung](https://github.com/match-BiBaZu/BiBaZu_AutoTune_Training/blob/main/docs/experiments.md).
+
+### ML-Empfehlung
+
+Nach dem Training in **BiBaZu AutoTune Training** ein Bauteil und die
+Pose-zu-Pose-Transition in AutoTune wählen. Anschließend **Berechnung durchführen**,
+eine Zeile für Array und Düsen auswählen und **ML-Empfehlung …** öffnen.
+Modell und Druck-/Impulsraster einstellen und **Raster bewerten** wählen.
+Der Vorschlag zeigt das Paar mit der höchsten Wahrscheinlichkeit für
+`flipped`, die drei Klassenwahrscheinlichkeiten und den analytischen
+Überdruck als Referenz. Die Suche ändert keine Editor- oder SPS-Parameter.
+
+Unbekannte Bauteile und Punkte außerhalb der beobachteten Merkmalsspannen werden
+gekennzeichnet. Bei einem ungeprüften Modell fehlt eine Bewertung auf
+zurückgehaltenen Bauteilen. Beide Programme müssen mit passenden Versionen der
+ML-Abhängigkeiten installiert sein. `Setup.ps1` installiert diese mit.
 
 Der normale Start betreibt eine eigene, fensterlose PLC-API auf einem freien
 Loopback-Port. Die Oberfläche spricht ausschließlich über HTTP mit dieser API;
@@ -398,10 +416,36 @@ Mit Impulsdauer Δt und Hebelarm ℓ wird die erforderliche mittlere Kraft berec
 
 ```text
 F_tip = sqrt(2 * J * m * g * Δh) / (Δt * ℓ)
-K = c_d*c_m*c_c*A_eff * κ/(κ−1)*p_a * (d_0/(2*r_j))²
+```
+
+Die Kraft-Druck-Beziehung folgt Gleichung (5.3), einschließlich des quadrierten
+Konzentrizitätsfaktors:
+
+```text
+F_d = c_d * c_c² * c_m * A_st * p_1 * κ/(κ−1)
+      * [(p_0/p_1)^((κ−1)/κ) − 1]
+      * [d_1 / (d_1 + 2*y*tan(γ_k/2))]²
+```
+
+Dabei sind p_0 der absolute Düsendruck und p_1 = p_a der absolute Umgebungsdruck
+in Pa, d_1 = d_0 der Öffnungsdurchmesser und y der Düsenabstand in m sowie γ_k
+der volle Strahlöffnungswinkel (Eingabe in Grad, intern in Radiant).
+Als Erweiterung für mehrere Strahlen wird A_st = A_eff = sum(w_i * π * r_j²)
+über die Öffnungen aktiver Düsen verwendet; überlappende Strahlen werden addiert.
+Diese Flächendefinition ist die gewählte Umsetzung der „Inflow Area“ im Modell.
+
+Mit 2*r_j = d_1 + 2*y*tan(γ_k/2) ergibt sich die inverse Druckberechnung:
+
+```text
+K = c_d*c_c²*c_m*A_eff * p_a * κ/(κ−1) * (d_0/(2*r_j))²
 p_0 = p_a * (1 + F_tip/K)^(κ/(κ−1))
 p_g = p_0 − p_a
 ```
+
+Vorwärts- und inverse Rechnung verwenden denselben Faktor K. Für c_c = 1 bleiben
+die bisherigen Ergebnisse bis auf numerische Rundung unverändert; andere Werte
+wirken jetzt quadratisch. `log1p`/`expm1` vermeiden Genauigkeitsverluste bei kleinen
+Druckunterschieden. Die eingegebenen Koeffizienten werden nicht automatisch angepasst.
 
 Alle Rechnungen verwenden SI-Einheiten. Die Kandidatentabelle zeigt Offset in mm,
 Überdruck p_g in mbar und absoluten Druck p_0 in bar. Die Detailansicht zeigt
@@ -488,8 +532,9 @@ Variantenverwaltung oder Versuchsprotokollansicht.
 `Engine`, `Strategy`, `RecipeStrategy`, bestehende Kamera-Clients und deren
 Dateiformate bleiben als vorhandene Bausteine mit eigenen Tests erhalten.
 Frühere Aufzeichnungen unter `data/runs/` werden nicht verändert oder gelöscht.
-Ein neues Programm für experimentelle Datenerfassung und ML-Training wird
-hier noch nicht entwickelt. Der vorhandene separate Drucktest bleibt unverändert.
+Experimentelle Datenerfassung und ML-Training liegen in `BiBaZu_AutoTune_Training`.
+Bestehende Kampagnen unter `data/experiments/` können dort weiter verwendet werden.
+Der vorhandene separate Drucktest bleibt unverändert.
 
 ## Roadmaps und Parametersätze
 

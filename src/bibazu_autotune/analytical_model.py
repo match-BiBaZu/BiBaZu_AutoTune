@@ -758,17 +758,31 @@ class PressurePrediction:
 
 
 def drag_factor(area_m2: float, config: ModelConfiguration) -> float:
+    """Pressure-independent factor K of the reference force equation (5.3).
+
+    K = c_d * c_c**2 * c_m * A_st * p_1 * kappa/(kappa - 1)* [d_1 / (d_1 + 2*y*tan(gamma_k/2))]**2
+
+    A_st = area_m2 is the multi-jet extension: sum(w_i * pi * r_j**2)
+    over openings of active nozzles. Overlapping jets remain additive.
+    p_1 is absolute ambient pressure [Pa]; d_1 and y use meters;
+    gamma_k is converted from the configured full spread angle to radians.
+    The other symbols are dimensionless. K has units of force [N].
+    """
     config.validate()
-    factor = (
-        config.drag_coefficient
-        * config.mesh_coefficient
-        * config.concentricity_coefficient
-        * area_m2
-        * config.kappa
-        / (config.kappa - 1)
-        * config.ambient_pa
-        * (config.diameter_m / (2 * config.jet_radius_m)) ** 2
-    )
+    c_d = config.drag_coefficient
+    c_c = config.concentricity_coefficient
+    c_m = config.mesh_coefficient
+    A_st = area_m2
+    p_1 = config.ambient_pa
+    kappa = config.kappa
+    d_1 = config.diameter_m
+    y = config.distance_m
+    gamma_k = math.radians(config.spread_angle_deg)
+    jet_spread_factor = (d_1 / (d_1 + 2 * y * math.tan(gamma_k / 2))) ** 2
+    try:
+        factor = c_d * c_c**2 * c_m * A_st * p_1 * kappa / (kappa - 1) * jet_spread_factor
+    except OverflowError as exc:
+        raise ValueError("Strömungsfaktor liegt außerhalb des endlichen Zahlenbereichs.") from exc
     if not math.isfinite(factor) or factor <= 0:
         raise ValueError(
             "Wirksame Strahlfläche und Strömungsfaktor müssen positiv und endlich sein."
@@ -777,11 +791,22 @@ def drag_factor(area_m2: float, config: ModelConfiguration) -> float:
 
 
 def drag_force(gauge_pa: float, area_m2: float, config: ModelConfiguration) -> float:
+    """Reference force equation (5.3), returning F_d in N:
+
+    F_d = c_d * c_c**2 * c_m * A_st * p_1 * kappa/(kappa - 1)
+          * [(p_0/p_1)**((kappa - 1)/kappa) - 1]
+          * [d_1 / (d_1 + 2*y*tan(gamma_k/2))]**2
+
+    drag_factor() supplies all terms except the pressure term.
+    p_0 is absolute nozzle pressure [Pa]: p_0 = p_1 + gauge_pa.
+    log1p/expm1 evaluate the same pressure term accurately near p_0 = p_1.
+    """
     if not math.isfinite(gauge_pa) or gauge_pa < 0:
         raise ValueError("Überdruck muss endlich und nichtnegativ sein.")
-    return drag_factor(area_m2, config) * math.expm1(
-        (config.kappa - 1) / config.kappa * math.log1p(gauge_pa / config.ambient_pa)
-    )
+    factor = drag_factor(area_m2, config)
+    p_1, kappa = config.ambient_pa, config.kappa
+    pressure_term = math.expm1((kappa - 1) / kappa * math.log1p(gauge_pa / p_1))
+    return factor * pressure_term
 
 
 class PressureModel(Protocol):
@@ -797,7 +822,14 @@ class PressureModel(Protocol):
 
 class AnalyticalPressureModel:
     def predict(self, body, mechanics, impact, pulse_ms, config):
-        """Compute tipping force, invert the drag equation and report model limits."""
+        """Compute tipping force and invert reference force equation (5.3).
+
+        With K = drag_factor(A_st, config), including c_c**2:
+        p_0 = p_1 * (1 + F_tip/K)**(kappa/(kappa - 1))
+        p_g = p_0 - p_1
+
+        Both pressures returned by this model use Pa. Model limits are warnings.
+        """
         config.validate()
         if any(
             not math.isfinite(v) or v <= 0
@@ -819,7 +851,8 @@ class AnalyticalPressureModel:
         factor = drag_factor(impact.area_eff_m2, config)
         pressure_exponent = config.kappa / (config.kappa - 1)
         try:
-            # log1p/expm1 keep equation (7) accurate for small pressure differences.
+            # p_g = p_1 * [(1 + F_tip/K)**(kappa/(kappa - 1)) - 1].
+            # log1p/expm1 keep the inverse of (5.3) accurate near zero gauge pressure.
             gauge_pa = config.ambient_pa * math.expm1(
                 pressure_exponent * math.log1p(force_n / factor)
             )

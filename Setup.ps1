@@ -2,7 +2,7 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 if (Get-Command uv -ErrorAction SilentlyContinue) {
-    & uv sync --extra dev
+    & uv sync --extra dev --extra ml
     if ($LASTEXITCODE -ne 0) { throw 'Installation mit uv fehlgeschlagen.' }
 } else {
     if (-not (Test-Path -LiteralPath '.venv\Scripts\python.exe')) {
@@ -11,8 +11,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
         else { throw 'Python 3.11+ oder uv installieren und Setup erneut starten.' }
         if ($LASTEXITCODE -ne 0) { throw 'Virtuelle Umgebung konnte nicht erstellt werden.' }
     }
-    & .\.venv\Scripts\python.exe -m pip install -e '.[dev]'
+    & .\.venv\Scripts\python.exe -m pip install -e '.[dev,ml]'
     if ($LASTEXITCODE -ne 0) { throw 'Paketinstallation fehlgeschlagen.' }
 }
 Write-Host 'Bereit. Start.cmd öffnet AutoTune mit eigener PLC-API; StartApi.cmd startet nur die API.'
-Write-Host 'Start-Training.cmd öffnet die Datenerfassung; --demo simuliert SPS und Kamera.'

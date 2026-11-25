@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .candidate_transfer import candidate_parameters, check_candidate
+from .candidate_transfer import candidate_parameters, check_candidate, check_candidate_setup
 from .clients import PressureClient
 from .engine import atomic_json
 from .model_results import CalculationResultsWidget
@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
         self.syncing_parameters = self.parameters_locked = self.has_local_parameters = False
         self.file_dialog_open = self.closing = False
         self.active_dialog = None
+        self.ml_dialog = None
         self.profile_template = {}
         self.profile_directory = Path(output_dir).parent / "profiles"
         self.live_timer = QTimer(self)
@@ -345,6 +346,7 @@ class MainWindow(QMainWindow):
             "Ausgewählten SPS-Sollwert und Offset in den Editor übernehmen. "
             "Bei SPS-Verbindung erfolgt die bestehende Live-Übertragung."
         )
+        self.ml_button = self.button(actions, "ML-Empfehlung …", self.open_ml_recommendation)
         self.autotune_status = QLabel()
         self.autotune_status.setWordWrap(True)
         self.autotune_results.layout().insertLayout(0, actions)
@@ -497,19 +499,73 @@ class MainWindow(QMainWindow):
             )
         )
         candidate = self.autotune_results.selected_candidate()
-        available = (
-            editable
-            and not self.parameters_locked
-            and settings.model_result is not None
-            and candidate is not None
-            and any(c is candidate for c in settings.model_result.candidates)
-        )
+        available = self.current_calculated_candidate(candidate)
+        recommendable = available and candidate.mechanics is not None
+        if recommendable:
+            try:
+                check_candidate_setup(candidate)
+            except ValueError:
+                recommendable = False
+        self.ml_button.setEnabled(bool(recommendable))
+        available = available and not self.parameters_locked
         if available:
             try:
                 check_candidate(candidate)
             except ValueError:
                 available = False
         self.import_button.setEnabled(bool(available))
+
+    def current_calculated_candidate(self, candidate):
+        result = self.autotune_settings.model_result
+        return (
+            self.can_select()
+            and result is not None
+            and candidate is not None
+            and any(c is candidate for c in result.candidates)
+        )
+
+    def open_ml_recommendation(self):
+        from .ml.features import context_for_candidate
+        from .ml.recommendation import RecommendationDialog
+
+        candidate = self.autotune_results.selected_candidate()
+        settings = self.autotune_settings
+        if not self.current_calculated_candidate(candidate) or settings.analysis is None:
+            return
+        try:
+            parameters = self.editor.parameters()
+            context = context_for_candidate(
+                settings.analysis,
+                candidate,
+                settings.model_panel.configuration(),
+                parameters,
+            )
+        except ValueError as exc:
+            self.autotune_status.setText(f"ML-Empfehlung nicht verfügbar: {exc}")
+            return
+        array = parameters["arrays"][candidate.mount.array_index - 1]
+        setup = (
+            f"{settings.analysis.path.stem} · Array {candidate.mount.array_index} · "
+            f"{candidate.nozzle_label} · Offset {context.offset_mm:g} mm · "
+            f"Band {context.conveyor_speed_mm_per_sec:g} mm/s · Verzögerung {context.delay_ms:g} ms"
+        )
+        dialog = RecommendationDialog(
+            context,
+            settings.analysis.sha256,
+            setup,
+            array["pressure_mbar"],
+            candidate.pulse_ms,
+            self,
+        )
+        settings.inputs_changed.connect(dialog.invalidate_setup)
+        self.autotune_results.selection_changed.connect(dialog.invalidate_setup)
+        self.editor.parameters_changed.connect(dialog.invalidate_setup)
+        self.ml_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self.ml_dialog = None
+            dialog.deleteLater()
 
     def calculate_autotune(self):
         if self.state not in {"disconnected", "ready"} or self.file_dialog_open:
@@ -866,6 +922,11 @@ class MainWindow(QMainWindow):
             self.close()
 
     def closeEvent(self, event):
+        if self.ml_dialog is not None:
+            if self.ml_dialog.worker is not None:
+                event.ignore()
+                return
+            self.ml_dialog.reject()
         self.closing = True
         self.live_timer.stop()
         if self.active_dialog:

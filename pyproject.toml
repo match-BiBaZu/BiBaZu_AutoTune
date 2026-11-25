@@ -16,18 +16,17 @@ dependencies = [
     "pydantic>=2.9,<3",
     "PyYAML>=6,<7",
     "numpy>=1.26,<3",
-    "opencv-python>=4.10,<5",
     "trimesh>=4.12,<6",
     "shapely>=2.1,<3",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
+ml = ["scikit-learn>=1.7,<2", "skops>=0.13,<1", "threadpoolctl>=3.1,<4"]
 
 [project.scripts]
 bibazu-autotune = "bibazu_autotune.app:main"
 bibazu-autotune-api = "bibazu_autotune.pressure_service:main"
-bibazu-autotune-training = "bibazu_autotune.experiments.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bibazu_autotune"]
