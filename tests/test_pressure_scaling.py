@@ -16,17 +16,17 @@ from bibazu_autotune.pressure_scaling import (
 )
 
 
-def test_100_ms_peak_reference_in_si_and_scaled_editor_value():
+def test_manual_defaults_in_si_and_scaled_editor_value():
     result = scale_pressure(200000, DEFAULT_PRESSURE_SCALE_A, DEFAULT_PRESSURE_SCALE_B_PA)
-    assert result.gauge_pa / 100 == pytest.approx(3491.248526650112, abs=1e-9)
-    assert result.scale_b_pa / 100 == pytest.approx(-284.80891486008954)
+    assert result.gauge_pa / 100 == pytest.approx(3529.167, abs=1e-9)
+    assert result.scale_b_pa / 100 == pytest.approx(432.167)
     value = replace(candidate(pressure=2000), sps_pressure=result)
     before = parameters()
     saved = copy.deepcopy(before)
     proposal = candidate_parameters(before, value)
     assert before == saved
     assert value.pressure.gauge_pa == 200000
-    assert proposal["arrays"][1]["pressure_mbar"] == 3491
+    assert proposal["arrays"][1]["pressure_mbar"] == 3529
 
 
 @pytest.mark.parametrize("pressure_pa", [0, 100, 600000, 1e6])
@@ -34,8 +34,8 @@ def test_neutral_scaling_keeps_analytical_pressure(pressure_pa):
     assert scale_pressure(pressure_pa, 1, 0).gauge_pa == pressure_pa
 
 
-@pytest.mark.parametrize("b_pa,expected", [(-1000, 402000), (0, 400000), (1000, 398000)])
-def test_signed_intercept_is_subtracted_in_pa(b_pa, expected):
+@pytest.mark.parametrize("b_pa,expected", [(-1000, 99000), (0, 100000), (1000, 101000)])
+def test_signed_intercept_is_added_in_pa(b_pa, expected):
     assert scale_pressure(200000, 0.5, b_pa).gauge_pa == expected
 
 
@@ -57,7 +57,7 @@ def test_invalid_intercept_rejected_by_model_and_scaler(b):
 
 def test_overflow_and_invalid_analytical_pressure_have_explicit_errors():
     with pytest.raises(ValueError, match="endlichen Zahlenbereichs"):
-        scale_pressure(1e308, 1e-308, 0)
+        scale_pressure(1e308, 2, 0)
     for value in (-1, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="Analytischer Überdruck"):
             scale_pressure(value, 1, 0)
@@ -73,15 +73,15 @@ def test_only_scaled_unrounded_bounds_block_atomic_transfer(pressure_pa):
     assert original == before
 
 
-@pytest.mark.parametrize("analytical_pa,a,b", [(0, 1, 1), (600001, 1, 0), (600000, 0.5, 0)])
+@pytest.mark.parametrize("analytical_pa,a,b", [(0, 1, -1), (600001, 1, 0), (600000, 2, 0)])
 def test_finite_scaled_values_are_shown_without_clipping(analytical_pa, a, b):
     result = scale_pressure(analytical_pa, a, b)
-    assert result.gauge_pa == (analytical_pa - b) / a
+    assert result.gauge_pa == a * analytical_pa + b
     assert "SPS-Druckgrenzen" in result.warnings[0]
 
 
 def test_sps_bounds_use_scaled_pressure_not_analytical_pressure():
-    value = replace(candidate(pressure=7000), sps_pressure=scale_pressure(700000, 2, 0))
+    value = replace(candidate(pressure=7000), sps_pressure=scale_pressure(700000, 0.5, 0))
     assert candidate_parameters(parameters(), value)["arrays"][1]["pressure_mbar"] == 3500
     value = replace(value, sps_pressure=None)
     with pytest.raises(ValueError):
@@ -105,7 +105,7 @@ def test_same_scaling_for_other_arrays_and_pulses_leaves_physics_unchanged(tmp_p
         assert new.sps_pressure.scale_a == config.pressure_scale_a
         assert new.sps_pressure.scale_b_pa == config.pressure_scale_b_pa
         assert new.sps_pressure.gauge_pa == pytest.approx(
-            (new.pressure.gauge_pa - config.pressure_scale_b_pa) / config.pressure_scale_a
+            config.pressure_scale_a * new.pressure.gauge_pa + config.pressure_scale_b_pa
         )
 
 
@@ -117,7 +117,7 @@ def test_scaling_overflow_keeps_analytical_result_visible(tmp_path):
             return PressurePrediction(1, config.ambient_pa + 1e8, 1e8, 90000, ())
 
     candidates = AnalyticalModel(pressure=Pressure()).evaluate(
-        analysis, context, parameters(), configured(pressure_scale_a=1e-310)
+        analysis, context, parameters(), configured(pressure_scale_a=1e308)
     )
     for value in candidates:
         assert value.status == "blocked"

@@ -194,7 +194,7 @@ class ModelPanel(QWidget):
         )
         self.add_note(
             forms["scaling"],
-            "p_SPS = (p_analytisch − b) / a; Drücke in mbar. "
+            "p_SPS = a * p_analytisch + b; Drücke in mbar. "
             "Der analytische Druck bleibt in den Ergebnissen sichtbar. "
             "Übernommen wird der SPS-Sollwert innerhalb 0–6000 mbar.",
         )

@@ -438,7 +438,7 @@ oberhalb der kritischen Strömungsgrenze werden unverändert mit Status angezeig
 Der kritische Überdruck ist p_a * (((κ+1)/2)^(κ/(κ−1)) − 1). Es erfolgt keine Kappung.
 
 **Empirische SPS-Druckskalierung:** Nach dem analytischen Modell wird der Sollwert
-als `p_SPS = (p_analytisch − b) / a` berechnet. Alle Drücke sind Überdrücke;
+als `p_SPS = a * p_analytisch + b` berechnet. Alle Drücke sind Überdrücke;
 intern werden Pa verwendet, in der GUI mbar. Der analytische Absolutdruck ist
 kein Eingang der Skalierung. Unter **SPS-Druckskalierung** sind **Druckskalierung a [–]**
 und **Druckskalierung b [mbar]** einstellbar. a muss endlich und positiv sein,
@@ -446,13 +446,14 @@ b endlich; beide Vorzeichen von b sind erlaubt. Die vorhandene Schaltfläche
 zum Speichern der Modellstandards speichert auch diese Werte. Alte Standarddateien
 erhalten fehlende Felder beim Laden im Speicher, ohne dabei überschrieben zu werden.
 
-Die Vorgaben `a = 0,6544389198933329` und `b = −284,80891486008954 mbar`
-stammen aus dem Spitzendruck-Fit bei **100 ms, Array 2/Düse 1**, Messlauf
-`53f1095c8f3244b182ab08c3980a6dac`: Wiederholungen 2–5 der sechs Druckstufen,
-insgesamt 24 Messungen. Dieses eine Paar gilt vorläufig für **alle Arrays,
+Die Standardwerte sind manuell vorgegeben: `a = 1,5485` und `b = 432,167 mbar`
+(`43216,7 Pa` intern). Die Anwendung berechnet oder fittet diese Koeffizienten
+nicht automatisch. Dieses eine Paar gilt vorläufig für **alle Arrays,
 Düsenkombinationen und Impulsdauern**, ohne automatische Umschaltung.
-Beispiel: 2000 mbar analytischer Druck ergeben 3491,24852665 mbar SPS-Sollwert;
-übernommen werden kaufmännisch gerundet **3491 mbar**. Mit a=1 und b=0 ist die
+Bereits gespeicherte a/b-Werte haben Vorrang vor den Standardwerten und müssen
+für die neue Formel gegebenenfalls in den Eingabefeldern angepasst werden.
+Beispiel: 2000 mbar analytischer Druck ergeben 3529,167 mbar SPS-Sollwert;
+übernommen werden kaufmännisch gerundet **3529 mbar**. Mit a=1 und b=0 ist die
 Skalierung neutral. Änderungen an a oder b verlangen eine neue Berechnung.
 
 Spitzendruck und analytisch angenommener Druck sind damit empirisch zugeordnet;

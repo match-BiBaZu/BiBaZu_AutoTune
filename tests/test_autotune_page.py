@@ -36,22 +36,23 @@ def test_analytical_and_scaled_pressure_are_separate_and_button_imports_scaled(
     wait(lambda: settings.model_result is not None)
     selected = window.autotune_results.selected_candidate()
     assert selected.pressure.gauge_pa == 200000
-    assert selected.sps_pressure.gauge_pa / 100 == pytest.approx(3491.24852665)
+    assert selected.sps_pressure.gauge_pa / 100 == pytest.approx(3529.167)
     table = window.autotune_results.table
     assert table.horizontalHeaderItem(5).text() == "Analytischer Überdruck [mbar]"
     assert table.horizontalHeaderItem(6).text() == "SPS-Sollwert [mbar]"
     assert float(table.item(0, 5).text()) == 2000
-    assert float(table.item(0, 6).text()) == pytest.approx(3491.24852665, rel=1e-5)
+    assert float(table.item(0, 6).text()) == pytest.approx(3529.167, rel=1e-5)
     details = window.autotune_results.details.toPlainText()
-    assert "SPS-Druckskalierung" in details and "284.808" in details
-    assert "100 ms, Array 2/Düse 1" in details
+    assert "SPS-Druckskalierung" in details
+    assert "p_SPS = a * p_analytisch + b = 1.5485 * 2000 + (432.167) = 3529.167" in details
+    assert "Manuell vorgegebene Koeffizienten" in details
     assert window.editor.parameters() == original
     window.import_button.click()
     assert (
         window.editor.parameters()["arrays"][selected.mount.array_index - 1]["pressure_mbar"]
-        == 3491
+        == 3529
     )
-    assert "skaliertem SPS-Sollwert 3491 mbar" in window.autotune_status.text()
+    assert "skaliertem SPS-Sollwert 3529 mbar" in window.autotune_status.text()
     assert not services.calls and not errors
 
 

@@ -142,7 +142,7 @@ def test_replacement_stages_obey_dependencies(tmp_path):
         analysis,
         manual(analysis.sha256),
         parameters(),
-        replace(config, pressure_scale_a=1e-310),
+        replace(config, pressure_scale_a=1e308),
     )
     assert failed_scaling.sps_pressure.status == "blocked"
     assert all(c.pressure is not None for c in failed_scaling.candidates)

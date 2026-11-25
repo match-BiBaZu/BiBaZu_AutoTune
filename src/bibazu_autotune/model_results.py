@@ -292,8 +292,9 @@ class CalculationResultsWidget(QWidget):
                 f"Analytischer Überdruck [mbar]: {c.pressure.gauge_pa / 100:.10g}",
                 f"SPS-Sollwert [mbar]: {sps.gauge_pa / 100:.10g}",
                 "SPS-Druckskalierung (Drücke in mbar): "
-                f"({c.pressure.gauge_pa / 100:.10g} − ({sps.scale_b_pa / 100:.10g})) "
-                f"/ {sps.scale_a:.12g} = {sps.gauge_pa / 100:.10g}",
+                "p_SPS = a * p_analytisch + b = "
+                f"{sps.scale_a:.12g} * {c.pressure.gauge_pa / 100:.10g} "
+                f"+ ({sps.scale_b_pa / 100:.10g}) = {sps.gauge_pa / 100:.10g}",
                 sps.source,
             ]
         self.details.setPlainText("\n".join(lines))

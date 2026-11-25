@@ -57,8 +57,8 @@ def test_old_defaults_add_scaling_and_save_signed_coefficients(tmp_path):
 def test_scaling_controls_use_mbar_and_share_defaults_button(offline_window):
     window, services, errors, _ = offline_window
     panel = window.autotune_settings.model_panel
-    assert panel.fields["pressure_scale_a"][0].value() == pytest.approx(0.6544389198933329)
-    assert panel.fields["pressure_scale_b_pa"][0].value() == pytest.approx(-284.80891486008954)
+    assert panel.fields["pressure_scale_a"][0].value() == pytest.approx(1.5485)
+    assert panel.fields["pressure_scale_b_pa"][0].value() == pytest.approx(432.167)
     panel.fields["pressure_scale_a"][0].setValue(0.75)
     panel.fields["pressure_scale_b_pa"][0].setValue(-123.456)
     assert panel.configuration().pressure_scale_b_pa == pytest.approx(-12345.6)

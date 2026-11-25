@@ -1,7 +1,7 @@
 """Empirical peak-pressure mapping, separate from the analytical force model.
 
-All pressures, including the intercept, use Pa. The defaults fit the 100-ms
-measurements of array 2/nozzle 1, repetitions 2–5, run 53f1095c8f3244b182ab08c3980a6dac.
+The coefficients a and b are user inputs, not fitted automatically.
+All pressures, including the intercept b, use Pa.
 """
 
 from __future__ import annotations
@@ -9,10 +9,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-DEFAULT_PRESSURE_SCALE_A = 0.6544389198933329
-DEFAULT_PRESSURE_SCALE_B_PA = -28480.891486008954
+DEFAULT_PRESSURE_SCALE_A = 1.5485
+DEFAULT_PRESSURE_SCALE_B_PA = 43_216.7  # b = 432.167 mbar
 PRESSURE_SCALING_SOURCE = (
-    "Vorgaben aus Spitzendruck-Fit: 100 ms, Array 2/Düse 1, Wiederholungen 2–5. "
+    "Manuell vorgegebene Koeffizienten a und b; keine automatische Anpassung. "
     "Das aktuelle a/b-Paar gilt vorläufig für alle Kandidaten; "
     "andere Impulsdauern und Düsenkombinationen sind damit nicht gesondert kalibriert."
 )
@@ -35,15 +35,17 @@ class SpsPressurePrediction:
 
 
 def scale_pressure(analytical_gauge_pa: float, a: float, b_pa: float) -> SpsPressurePrediction:
+    """Apply p_sps = a * p_analytisch + b, with gauge pressures and b in Pa."""
     validate_pressure_scaling(a, b_pa)
     if not math.isfinite(analytical_gauge_pa) or analytical_gauge_pa < 0:
         raise ValueError("Analytischer Überdruck muss endlich und nichtnegativ sein.")
-    gauge_pa = (analytical_gauge_pa - b_pa) / a
-    if not math.isfinite(gauge_pa):
+    # p_sps = a * p_analytisch + b
+    p_sps_pa = a * analytical_gauge_pa + b_pa
+    if not math.isfinite(p_sps_pa):
         raise ValueError("Skalierter SPS-Druck liegt außerhalb des endlichen Zahlenbereichs.")
     warnings = (
         ("Skalierter SPS-Druck außerhalb der SPS-Druckgrenzen 0–6000 mbar",)
-        if not 0 <= gauge_pa <= 600000
+        if not 0 <= p_sps_pa <= 600000
         else ()
     )
-    return SpsPressurePrediction(gauge_pa, a, b_pa, warnings)
+    return SpsPressurePrediction(p_sps_pa, a, b_pa, warnings)
