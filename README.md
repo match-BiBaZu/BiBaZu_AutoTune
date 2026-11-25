@@ -13,7 +13,7 @@ Kamera, Variantenreihen und Versuchsdurchführung liegen in der separat startbar
 `BiBaZu_AutoTune_Training`. Gemeinsames analytisches Modell, Posewerkzeuge und
 SPS-Dienst bleiben in AutoTune; die Trainingsanwendung installiert dieses Paket
 als Abhängigkeit. Die normale AutoTune-Oberfläche behält ihren bisherigen Ablauf.
-Das Training-Repo erstellt Drei-Klassen-GP-Modelle aus geprüften Kampagnen.
+Das Training-Repo erstellt GP-Modelle für zwei oder drei Flipklassen aus geprüften Kampagnen.
 Bestehende Versuchsbausteine und aufgezeichnete Daten bleiben erhalten.
 
 ## Forschungshintergrund
@@ -44,8 +44,10 @@ Pose-zu-Pose-Transition in AutoTune wählen. Anschließend **Berechnung durchfü
 eine Zeile für Array und Düsen auswählen und **ML-Empfehlung …** öffnen.
 Modell und Druck-/Impulsraster einstellen und **Raster bewerten** wählen.
 Der Vorschlag zeigt das Paar mit der höchsten Wahrscheinlichkeit für
-`flipped`, die drei Klassenwahrscheinlichkeiten und den analytischen
+`flipped`, die verfügbaren Klassenwahrscheinlichkeiten und den analytischen
 Überdruck als Referenz. Die Suche ändert keine Editor- oder SPS-Parameter.
+Bei zwei trainierten Klassen beziehen sich die Wahrscheinlichkeiten auf diese
+beiden Klassen. In der Spalte der fehlenden Klasse steht ein Strich.
 
 Unbekannte Bauteile und Punkte außerhalb der beobachteten Merkmalsspannen werden
 gekennzeichnet. Bei einem ungeprüften Modell fehlt eine Bewertung auf

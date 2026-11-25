@@ -30,12 +30,12 @@ class GridPoint:
     pressure_mbar: int
     pulse_duration_ms: int
     analytical_mbar: float
-    probabilities: tuple[float, float, float]
+    probabilities: dict[str, float]
     outside_features: tuple[str, ...]
 
     @property
     def flip_probability(self):
-        return self.probabilities[1]
+        return self.probabilities["flipped"]
 
 
 def grid_axes(pressure, duration):
@@ -65,7 +65,7 @@ def score_grid(model, context, pressure, duration):
             [model.probabilities(matrix[i : i + 256]) for i in range(0, len(rows), 256)],
         )
     if (
-        probabilities.shape != (len(rows), 3)
+        probabilities.shape != (len(rows), len(model.classes))
         or not np.isfinite(probabilities).all()
         or (probabilities < 0).any()
         or not np.allclose(probabilities.sum(axis=1), 1)
@@ -76,7 +76,7 @@ def score_grid(model, context, pressure, duration):
             row[0],
             row[1],
             row[2],
-            tuple(float(p) for p in probability),
+            {label: float(p) for label, p in zip(model.classes, probability, strict=True)},
             tuple(name for (name, _), flag in zip(FEATURES, flags, strict=True) if flag),
         )
         for row, probability, flags in zip(rows, probabilities, outside, strict=True)

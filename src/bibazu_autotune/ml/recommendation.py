@@ -66,7 +66,10 @@ class GridTable(QAbstractTableModel):
                 str(point.pressure_mbar),
                 str(point.pulse_duration_ms),
                 f"{point.analytical_mbar:.2f}",
-                *(f"{p:.1%}" for p in point.probabilities),
+                *(
+                    f"{point.probabilities[label]:.1%}" if label in point.probabilities else "—"
+                    for label in FLIP_CLASSES
+                ),
                 "Extrapolation" if point.outside_features else "In Merkmalsspannen",
             )
             return values[index.column()]
@@ -245,9 +248,13 @@ class RecommendationDialog(QDialog):
         metadata, rows = worker.result
         self.grid.show_points(rows)
         best = rows[0]
-        details = [
-            f"{label}: {p:.1%}" for label, p in zip(FLIP_CLASSES, best.probabilities, strict=True)
-        ]
+        details = [f"{label}: {value:.1%}" for label, value in best.probabilities.items()]
+        missing = [label for label in FLIP_CLASSES if label not in best.probabilities]
+        if missing:
+            details.append(
+                "Wahrscheinlichkeiten nur für beobachtete Klassen · keine Schätzung für "
+                + ", ".join(missing)
+            )
         if best.outside_features:
             details.append("Extrapolation außerhalb beobachteter Merkmalsspannen")
         if self.part_hash not in metadata["part_groups"]:

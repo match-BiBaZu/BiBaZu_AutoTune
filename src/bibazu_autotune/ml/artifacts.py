@@ -15,7 +15,7 @@ from .features import FEATURE_VERSION, FEATURES
 
 MODEL_KIND = "gp_physics_classifier"
 FLIP_CLASSES = ("not_flipped", "flipped", "overflipped")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 FEATURE_SCHEMA = [{"name": name, "unit": unit} for name, unit in FEATURES]
 GP_TRUSTED_TYPES = (
     "sklearn.gaussian_process._gpc._BinaryGaussianProcessClassifierLaplace",
@@ -43,19 +43,24 @@ def read_metadata(directory):
 def save_model(estimator, metadata, directory=None):
     from skops.io import dump
 
+    trained_classes = set(estimator.classes_)
+    classes = tuple(label for label in FLIP_CLASSES if label in trained_classes)
+    if trained_classes != set(classes) or "flipped" not in classes or len(classes) < 2:
+        raise ValueError("Das Flipmodell benötigt Flips und mindestens eine Gegenklasse.")
     directory = Path(directory) if directory is not None else model_directory()
     directory.mkdir(parents=True, exist_ok=True)
     model_id = uuid4().hex
     target = directory / model_id
     metadata = {
         **metadata,
-        "schema_version": SCHEMA_VERSION,
+        # Three-class exports also work with readers of the original format.
+        "schema_version": 1 if classes == FLIP_CLASSES else SCHEMA_VERSION,
         "model_kind": MODEL_KIND,
         "model_id": model_id,
         "created_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "feature_version": FEATURE_VERSION,
         "features": FEATURE_SCHEMA,
-        "classes": FLIP_CLASSES,
+        "classes": classes,
         "libraries": library_versions(),
     }
     with TemporaryDirectory(prefix=".training-", dir=directory) as staging:
@@ -76,11 +81,15 @@ class FlipModel:
     metadata: dict
     feature_bounds: np.ndarray
 
+    @property
+    def classes(self):
+        return tuple(self.metadata["classes"])
+
     def probabilities(self, features):
         prediction = self.estimator.predict_proba(features)
         # scikit-learn chooses its own column order.
         classes = list(self.estimator.classes_)
-        return prediction[:, [classes.index(label) for label in FLIP_CLASSES]]
+        return prediction[:, [classes.index(label) for label in self.classes]]
 
 
 def load_model(directory):
@@ -91,7 +100,8 @@ def load_model(directory):
 
     directory = Path(directory)
     metadata = read_metadata(directory)
-    if metadata.get("schema_version") != SCHEMA_VERSION:
+    schema_version = metadata.get("schema_version")
+    if schema_version not in (1, SCHEMA_VERSION):
         raise ValueError("Unbekanntes Modellformat.")
     if metadata.get("model_kind") != MODEL_KIND:
         raise ValueError("Dieses Modell wird von AutoTune nicht unterstützt.")
@@ -105,7 +115,14 @@ def load_model(directory):
             "Die Bibliotheksversionen passen nicht zum Modell. Beide Programme abgleichen "
             "und das Modell erneut trainieren."
         )
-    if metadata.get("classes") != list(FLIP_CLASSES):
+    classes = metadata.get("classes")
+    if (
+        not isinstance(classes, list)
+        or "flipped" not in classes
+        or len(classes) < 2
+        or classes != [label for label in FLIP_CLASSES if label in classes]
+        or (schema_version == 1 and classes != list(FLIP_CLASSES))
+    ):
         raise ValueError("Ungültige Flipklassen in der Modelldatei.")
     bounds = np.asarray(metadata.get("feature_bounds"), dtype=float)
     if (
@@ -128,8 +145,8 @@ def load_model(directory):
         or type(estimator.steps[0][1]) is not StandardScaler
         or type(estimator.steps[1][1]) is not GaussianProcessClassifier
         or estimator.steps[1][1].multi_class != "one_vs_rest"
-        or set(getattr(estimator, "classes_", ())) != set(FLIP_CLASSES)
+        or set(getattr(estimator, "classes_", ())) != set(classes)
         or getattr(estimator, "n_features_in_", None) != len(FEATURES)
     ):
-        raise ValueError("Die geladene Pipeline passt nicht zum Drei-Klassen-GP.")
+        raise ValueError("Die geladene Pipeline passt nicht zum Flipmodell.")
     return FlipModel(estimator, metadata, bounds)

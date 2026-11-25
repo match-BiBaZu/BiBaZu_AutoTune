@@ -9,6 +9,7 @@ from PyQt6.QtCore import QTimer
 from test_gui import offline_window as offline_window
 from test_model_gui import prepare
 
+from bibazu_autotune.ml.artifacts import FLIP_CLASSES
 from bibazu_autotune.ml.features import FEATURES, context_for_candidate, context_from_snapshot
 from bibazu_autotune.ml.search import GridRange, grid_axes, score_grid
 
@@ -25,6 +26,7 @@ def test_grid_tie_breaking_limits_and_out_of_range():
 
     context = Context()
     model = SimpleNamespace(
+        classes=FLIP_CLASSES,
         feature_bounds=np.array(
             [(500, 1000), (100, 500), (0, 6000), *([(1, 1)] * (len(FEATURES) - 3))]
         ),
